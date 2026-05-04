@@ -3,6 +3,7 @@
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
+#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 #ifdef NDEBUG
 #define ALLOW_SHADERS_DUMPING 1
 #endif
@@ -441,7 +442,6 @@ public:
          reshade::register_event<reshade::addon_event::map_buffer_region>(FF7Remake::OnMapBufferRegion);
          reshade::register_event<reshade::addon_event::unmap_buffer_region>(FF7Remake::OnUnmapBufferRegion);
          // reshade::register_event<reshade::addon_event::update_buffer_region>(FF7Remake::OnUpdateBufferRegion);
-         reshade::register_event<reshade::addon_event::create_device>(FF7Remake::OnCreateDevice);
       }
    }
 
@@ -582,16 +582,6 @@ public:
 
       // Start from here, we then update it later in case the game rendered with black bars due to forcing a different aspect ratio from the swapchain buffer
       game_device_data.upscaled_render_resolution = device_data.output_resolution;
-   }
-
-   static bool OnCreateDevice(reshade::api::device_api api, uint32_t& api_version)
-   {
-      if (api != reshade::api::device_api::d3d11)
-      {
-         if (ignore_warnings == 0.f)
-            MessageBoxA(game_window, "This mod only supports Direct3D 11.\nSet -dx11 in the launch options or uninstall the mod.\nIf you are sure the launch option is set correctly, set ignore warning in advanced settings.", NAME, MB_SETFOREGROUND);
-      }
-      return false;
    }
 
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -2193,6 +2183,8 @@ public:
 
    static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
    {
+      SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
+
       ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
       ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
       DeviceData& device_data = *device->get_private_data<DeviceData>();
@@ -2221,6 +2213,8 @@ public:
 
    static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
    {
+      SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
+      
       ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
       ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
       DeviceData& device_data = *device->get_private_data<DeviceData>();
@@ -2593,7 +2587,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       reshade::unregister_event<reshade::addon_event::map_buffer_region>(FF7Remake::OnMapBufferRegion);
       reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(FF7Remake::OnUnmapBufferRegion);
       // reshade::unregister_event<reshade::addon_event::update_buffer_region>(FF7Remake::OnUpdateBufferRegion);
-      reshade::unregister_event<reshade::addon_event::create_device>(FF7Remake::OnCreateDevice);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

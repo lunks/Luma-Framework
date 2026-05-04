@@ -110,6 +110,8 @@ public:
 
     static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
     {
+        SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
+
         auto buffer = (ID3D11Buffer*)resource.handle;
         D3D11_BUFFER_DESC desc;
         buffer->GetDesc(&desc);
@@ -122,6 +124,8 @@ public:
 
     static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
     {
+        SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
+
         // Not thread safe, but it looks like it's fine.
         if (g_cbSharedPerViewData_handle == resource.handle)
         {

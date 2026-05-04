@@ -4,6 +4,7 @@
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
 #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
+#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 
 #include "..\..\Core\core.hpp"
 #include "includes\shader_detect.hpp"
@@ -1344,6 +1345,8 @@ public:
 
    static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
    {
+      SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
+
       ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
       ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
       DeviceData& device_data = *device->get_private_data<DeviceData>();
@@ -1370,6 +1373,8 @@ public:
 
    static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
    {
+      SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
+
       ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
       ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
       DeviceData& device_data = *device->get_private_data<DeviceData>();

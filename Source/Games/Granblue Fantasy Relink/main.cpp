@@ -6,6 +6,7 @@
 #define PATCH_JITTER_TABLE_INIT
 #define PATCH_SCENE_BUFFER 0
 #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
+#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 
 #include <d3d11.h>
 #include "..\..\Core\core.hpp"
@@ -547,6 +548,8 @@ public:
 
    static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
    {
+      SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api());
+
       ComPtr<ID3D11DeviceContext> native_device_context;
       ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
       HRESULT hr = device_child->QueryInterface(native_device_context.put());
