@@ -5,6 +5,9 @@
 #define ENABLE_FIDELITY_SK 1
 
 #include "..\..\Core\core.hpp"
+#define XXH_STATIC_LINKING_ONLY
+#define XXH_IMPLEMENTATION
+#include "xxhash.h"
 
 enum class FramePhase
 {
@@ -50,7 +53,7 @@ namespace
    ShaderHashesList shader_hashes_smaa_weight_calculation;
    ShaderHashesList shader_hashes_smaa_blending;
    ShaderHashesList shader_hashes_ui;
-   uint32_t hash_identity = 0;
+   uint64_t hash_identity = 0;
 
    uint8_t* jump_memory = nullptr;
 
@@ -186,12 +189,14 @@ struct GameDeviceDataPersona5 final : public GameDeviceData
    // after the bloom effect, as constant buffers are updated with UpdateSubresource
    com_ptr<ID3D11Buffer> modifiable_index_vertex_buffer;
    uint2 render_resolution = {};
+   uint2 upscale_resolution = {};
    uint2 target_resolution = {};
+   uint2 last_viewport_size = {};
    float fov = 0.0f;
 
    // variables used to fix motion vectors on non-skinned moving objects
-   std::unordered_map<uint32_t, float4x4> prev_local_to_view_lookup;
-   std::unordered_map<uint32_t, float4x4> local_to_view_lookup;
+   std::unordered_map<uint64_t, float4x4> prev_local_to_view_lookup;
+   std::unordered_map<uint64_t, float4x4> local_to_view_lookup;
    std::unordered_map<ID3D11Buffer*, std::array<uint8_t, 7168>> cbuffer_cache;
    std::atomic<ID3D11Buffer*> cb_transform = nullptr;
 #endif // ENABLE_SR
@@ -220,19 +225,21 @@ public:
       native_shaders_definitions.emplace(CompileTimeStringHash("Update Shadow Constants"), ShaderDefinition{"Luma_UpdateShadowConstants", reshade::api::pipeline_subobject_type::compute_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode Motion Vector"), ShaderDefinition{"Luma_DecodeMotionVector", reshade::api::pipeline_subobject_type::compute_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Merge"), ShaderDefinition{"Luma_CopyDsrResult", reshade::api::pipeline_subobject_type::compute_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Copy RGB 1 A"), ShaderDefinition{"Luma_Copy_RGB", reshade::api::pipeline_subobject_type::pixel_shader});
 
       reshade::register_event<reshade::addon_event::execute_secondary_command_list>(Persona5::OnExecuteSecondaryCommandList);
       reshade::register_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(Persona5::OnBindRenderTargetsAndDepthStencil);
       reshade::register_event<reshade::addon_event::map_buffer_region>(Persona5::OnMapBufferRegion);
       reshade::register_event<reshade::addon_event::update_buffer_region_command>(Persona5::OnUpdateBufferRegionCommand);
       reshade::register_event<reshade::addon_event::create_resource>(Persona5::OnCreateResource);
+      reshade::register_event<reshade::addon_event::bind_viewports>(Persona5::OnBindViewports);
 
       float4x4 identity = {};
       identity.m00 = 1.0f;
       identity.m11 = 1.0f;
       identity.m22 = 1.0f;
       identity.m33 = 1.0f;
-      hash_identity = compute_crc32((const uint8_t*)&identity, sizeof(identity));
+      hash_identity = XXH3_64bits((const uint8_t*)&identity, sizeof(identity));
    }
 
    void LoadConfigs() override
@@ -245,6 +252,18 @@ public:
    {
       auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
+      game_device_data.target_resolution.x = device_data.output_resolution.x;
+      game_device_data.target_resolution.y = device_data.output_resolution.y;
+
+      // unless the ultra wide screen mod is installed output resolution is alway 16:9
+      if ((float)game_device_data.target_resolution.x / (float)game_device_data.target_resolution.y < 16.0f / 9.0f)
+      {
+         game_device_data.target_resolution.y = (game_device_data.target_resolution.x / 16) * 9;
+      }
+      else if ((float)game_device_data.target_resolution.x / (float)game_device_data.target_resolution.y > 16.0f / 9.0f)
+      {
+         game_device_data.target_resolution.x = (game_device_data.target_resolution.y / 9) * 16;
+      }
    }
 
    void OnInitDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -286,21 +305,11 @@ public:
       uint32_t output_width;
       uint32_t output_height;
 
-      if (device_data.output_resolution.x > width &&
-          device_data.output_resolution.y > height)
+      if (game_device_data.target_resolution.x > width &&
+          game_device_data.target_resolution.y > height)
       {
-         output_width = device_data.output_resolution.x;
-         output_height = device_data.output_resolution.y;
-
-         // output resolution is alway 16:9
-         if ((float)output_width / (float)output_height < 16.0f / 9.0f)
-         {
-            output_height = (output_width / 16) * 9;
-         }
-         else if ((float)output_width / (float)output_height > 16.0f / 9.0f)
-         {
-            output_width = (output_height / 9) * 16;
-         }
+         output_width = game_device_data.target_resolution.x;
+         output_height = game_device_data.target_resolution.y;
       }
       else
       {
@@ -308,8 +317,8 @@ public:
          output_height = height;
       }
 
-      if (game_device_data.target_resolution.x != output_width ||
-          game_device_data.target_resolution.y != output_height ||
+      if (game_device_data.upscale_resolution.x != output_width ||
+          game_device_data.upscale_resolution.y != output_height ||
           game_device_data.render_resolution.x != width ||
           game_device_data.render_resolution.y != height)
       {
@@ -415,14 +424,15 @@ public:
          }
 
          game_device_data.replacement_textures.clear();
+         game_device_data.current_replacements.clear();
 
          float clear[] = {0.0f, 0.0f, 0.0f, 0.0f};
          native_device_context->ClearUnorderedAccessViewFloat(game_device_data.decoded_motion_vectors_uav.get(), clear);
 
          game_device_data.render_resolution.x = width;
          game_device_data.render_resolution.y = height;
-         game_device_data.target_resolution.x = output_width;
-         game_device_data.target_resolution.y = output_height;
+         game_device_data.upscale_resolution.x = output_width;
+         game_device_data.upscale_resolution.y = output_height;
       }
    }
 
@@ -493,7 +503,7 @@ public:
       if (game_device_data.current_replacements.contains(resource.get()))
       {
          auto& replacement = game_device_data.replacement_textures[game_device_data.current_replacements[resource.get()]];
-         // should always be out game_device_data.target_resolution but if a hash for a bloom shader is missing and an rtv
+         // should always be game_device_data.upscale_resolution but if a hash for a bloom shader is missing and an rtv
          // is reused we still might end up with a smaller render target here
          resolution = {replacement.desc.Width, replacement.desc.Height};
          return game_device_data.replacement_textures[game_device_data.current_replacements[resource.get()]].rtv.get();
@@ -501,7 +511,7 @@ public:
 
       if (resource.get() == (ID3D11Texture2D*)game_device_data.source_color.get())
       {
-         resolution = {game_device_data.target_resolution.x, game_device_data.target_resolution.y};
+         resolution = {game_device_data.upscale_resolution.x, game_device_data.upscale_resolution.y};
          return game_device_data.merged_texture_rtv.get();
       }
 
@@ -512,10 +522,11 @@ public:
       texture->GetDesc(&texture_desc);
       if (texture_desc.Width != game_device_data.render_resolution.x || texture_desc.Height != game_device_data.render_resolution.y)
       {
+         resolution = {texture_desc.Width, texture_desc.Height};
          return rtv;
       }
-      resolution.x = texture_desc.Width = game_device_data.target_resolution.x;
-      resolution.y = texture_desc.Height = game_device_data.target_resolution.y;
+      resolution.x = texture_desc.Width = game_device_data.upscale_resolution.x;
+      resolution.y = texture_desc.Height = game_device_data.upscale_resolution.y;
 
       return GetPostProcessRtv(texture_desc, resource.get(), game_device_data);
    }
@@ -532,13 +543,20 @@ public:
          return replacement.rtv.get();
       }
 
+      if (resource.get() == (ID3D11Texture2D*)game_device_data.source_color.get())
+      {
+         resolution = {game_device_data.upscale_resolution.x, game_device_data.upscale_resolution.y};
+         return game_device_data.merged_texture_rtv.get();
+      }
+
       com_ptr<ID3D11Texture2D> texture;
       resource->QueryInterface(&texture);
 
       D3D11_TEXTURE2D_DESC texture_desc;
       texture->GetDesc(&texture_desc);
-      if (texture_desc.Width >= game_device_data.target_resolution.x || texture_desc.Height >= game_device_data.target_resolution.y)
+      if (texture_desc.Width >= game_device_data.upscale_resolution.x || texture_desc.Height >= game_device_data.upscale_resolution.y)
       {
+         resolution = {texture_desc.Width, texture_desc.Height};
          return rtv;
       }
       resolution.x = texture_desc.Width = (uint32_t)((float)texture_desc.Width * cb_luma_global_settings.GameSettings.InvRenderScale);
@@ -571,7 +589,7 @@ public:
       // though at least for objects attached to bones mtxPrevLocalToWorld actually contains a transform matrix for
       // the next frame instead of the previous, so we need to build a lookup for the actual previous transforms here
       // and also apply the values we collected in the previous frame
-      uint32_t hash_current = compute_crc32((const uint8_t*)data, sizeof(float4x4));
+      uint64_t hash_current = XXH3_64bits((const uint8_t*)data, sizeof(float4x4));
 
       // skinned mesh vertex positions are already in view space
       if (hash_current == hash_identity)
@@ -579,7 +597,7 @@ public:
          return false;
       }
 
-      uint32_t hash_prev = compute_crc32((const uint8_t*)data + sizeof(float4x4), sizeof(float4x4));
+      uint64_t hash_prev = XXH3_64bits((const uint8_t*)data + sizeof(float4x4), sizeof(float4x4));
 
       game_device_data.local_to_view_lookup[hash_prev] = ((float4x4*)data)[0];
 
@@ -837,8 +855,8 @@ public:
       // fallthrough replace rtv on bloom select as well
       if (game_device_data.frame_phase == FramePhase::POSTPROCESSING_AND_UI &&
           SrActive(device_data) &&
-          (game_device_data.render_resolution.x != game_device_data.target_resolution.x ||
-             game_device_data.render_resolution.y != game_device_data.target_resolution.y))
+          (game_device_data.render_resolution.x != game_device_data.upscale_resolution.x ||
+             game_device_data.render_resolution.y != game_device_data.upscale_resolution.y))
       {
          com_ptr<ID3D11ShaderResourceView> srvs[4];
          native_device_context->PSGetShaderResources(0, 4, &srvs[0]);
@@ -861,22 +879,22 @@ public:
          }
 
          com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-         com_ptr<ID3D11RenderTargetView> render_target_views[2];
-         native_device_context->OMGetRenderTargets(2, &render_target_views[0], &depth_stencil_view);
-         if (!original_shader_hashes.Contains(shader_hashes_copy) && render_target_views[0])
+         com_ptr<ID3D11RenderTargetView> render_target_view;
+         native_device_context->OMGetRenderTargets(1, &render_target_view, &depth_stencil_view);
+         if (!original_shader_hashes.Contains(shader_hashes_copy) && render_target_view)
          {
             ID3D11RenderTargetView* replacement_rtv;
             uint2 replacement_resolution;
             if (original_shader_hashes.Contains(shader_hashes_bloom_select) ||
                 original_shader_hashes.Contains(shader_hashes_bloom_filter))
             {
-               replacement_rtv = GetPostProcessRtvScaled(render_target_views[0].get(), game_device_data, replacement_resolution);
+               replacement_rtv = GetPostProcessRtvScaled(render_target_view.get(), game_device_data, replacement_resolution);
             }
             else
             {
-               replacement_rtv = GetPostProcessRtvOutputRes(render_target_views[0].get(), game_device_data, replacement_resolution);
+               replacement_rtv = GetPostProcessRtvOutputRes(render_target_view.get(), game_device_data, replacement_resolution);
             }
-            if (replacement_rtv != render_target_views[0].get())
+            if (replacement_rtv != render_target_view.get())
             {
                native_device_context->OMSetRenderTargets(1, &replacement_rtv, nullptr);
 
@@ -902,20 +920,7 @@ public:
           (original_shader_hashes.Contains(shader_hashes_fxaa) ||
              original_shader_hashes.Contains(shader_hashes_smaa_blending)))
       {
-         com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->PSGetShaderResources(0, 1, &srv);
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
-
-         com_ptr<ID3D11Resource> srv_resource;
-         srv->GetResource(&srv_resource);
-
-         com_ptr<ID3D11Resource> rtv_resource;
-         rtv->GetResource(&rtv_resource);
-
-         native_device_context->CopySubresourceRegion(rtv_resource.get(), 0, 0, 0, 0, srv_resource.get(), 0, nullptr);
-
-         return DrawOrDispatchOverrideType::Skip;
+         native_device_context->PSSetShader(device_data.native_pixel_shaders[CompileTimeStringHash("Copy RGB 1 A")].get(), nullptr, 0);
       }
       else if (SrActive(device_data) &&
                (original_shader_hashes.Contains(shader_hashes_smaa_edge_detection) ||
@@ -984,9 +989,9 @@ public:
          std::shared_lock shared_lock_samplers(s_mutex_samplers);
          if (SrActive(device_data) &&
              game_device_data.render_resolution.y > 0.0f &&
-             game_device_data.target_resolution.y > 0.0f)
+             game_device_data.upscale_resolution.y > 0.0f)
          {
-            device_data.texture_mip_lod_bias_offset = SR::GetMipLODBias(game_device_data.render_resolution.y, game_device_data.target_resolution.y); // This results in -1 at output res
+            device_data.texture_mip_lod_bias_offset = SR::GetMipLODBias(game_device_data.render_resolution.y, game_device_data.upscale_resolution.y); // This results in -1 at output res
          }
          else
          {
@@ -1008,6 +1013,13 @@ public:
       std::swap(game_device_data.prev_local_to_view_lookup, game_device_data.local_to_view_lookup);
       game_device_data.local_to_view_lookup.clear();
       game_device_data.cbuffer_cache.clear();
+
+      if (game_device_data.last_viewport_size.x != 0 &&
+          game_device_data.last_viewport_size.y != 0)
+      {
+         game_device_data.target_resolution = game_device_data.last_viewport_size;
+         game_device_data.last_viewport_size = uint2(0, 0);
+      }
    }
 
    static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
@@ -1043,8 +1055,8 @@ public:
             auto* sr_instance_data = device_data.GetSRInstanceData();
             {
                SR::SettingsData settings_data;
-               settings_data.output_width = game_device_data.target_resolution.x;
-               settings_data.output_height = game_device_data.target_resolution.y;
+               settings_data.output_width = game_device_data.upscale_resolution.x;
+               settings_data.output_height = game_device_data.upscale_resolution.y;
                settings_data.render_width = game_device_data.render_resolution.x;
                settings_data.render_height = game_device_data.render_resolution.y;
                settings_data.dynamic_resolution = false;
@@ -1135,10 +1147,10 @@ public:
                   native_device_context->CSSetShaderResources(0, 2, srvs);
                   native_device_context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
                   native_device_context->CSSetSamplers(0, 1, samplers);
-                  native_device_context->Dispatch((game_device_data.target_resolution.x + 7) / 8, (game_device_data.target_resolution.y + 7) / 8, 1);
+                  native_device_context->Dispatch((game_device_data.upscale_resolution.x + 7) / 8, (game_device_data.upscale_resolution.y + 7) / 8, 1);
                }
 
-               if (game_device_data.render_resolution == game_device_data.target_resolution)
+               if (game_device_data.render_resolution == game_device_data.upscale_resolution)
                {
                   native_device_context->CopySubresourceRegion(game_device_data.source_color.get(), 0, 0, 0, 0, game_device_data.merged_texture.get(), 0, nullptr);
                }
@@ -1237,6 +1249,25 @@ public:
       return false;
    }
 
+   static void OnBindViewports(reshade::api::command_list* cmd_list, uint32_t first, uint32_t count, const reshade::api::viewport* viewports)
+   {
+      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      auto& game_device_data = GetGameDeviceData(device_data);
+
+      if (!game_device_data.draw_device_context)
+      {
+         return;
+      }
+
+      com_ptr<ID3D11DeviceContext> native_device_context;
+      ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
+      device_child->QueryInterface(&native_device_context);
+      if (native_device_context == game_device_data.draw_device_context)
+      {
+         game_device_data.last_viewport_size = uint2((uint32_t)viewports->width, (uint32_t)viewports->height);
+      }
+   }
+
    static bool OnCreateResource(reshade::api::device* device, reshade::api::resource_desc& desc, reshade::api::subresource_data* initial_data, reshade::api::resource_usage initial_state)
    {
       // after starting the game or some scene transitions the selected shadow quality is not applied anymore
@@ -1310,6 +1341,32 @@ public:
    void PrintImGuiAbout() override
    {
       ImGui::Text("Persona 5 Luma mod - about and credits section", "");
+      ImGui::Text("xxHash Library\n"
+                  "Copyright (c) 2012-2021 Yann Collet\n"
+                  "All rights reserved.\n"
+                  "\n"
+                  "BSD 2-Clause License (https://www.opensource.org/licenses/bsd-license.php)\n"
+                  "\n"
+                  "Redistribution and use in source and binary forms, with or without modification,\n"
+                  "are permitted provided that the following conditions are met:\n"
+                  "\n"
+                  "* Redistributions of source code must retain the above copyright notice, this\n"
+                  "  list of conditions and the following disclaimer.\n"
+                  "\n"
+                  "* Redistributions in binary form must reproduce the above copyright notice, this\n"
+                  "  list of conditions and the following disclaimer in the documentation and/or\n"
+                  "  other materials provided with the distribution.\n"
+                  "\n"
+                  "THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND\n"
+                  "ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED\n"
+                  "WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE\n"
+                  "DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR\n"
+                  "ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES\n"
+                  "(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;\n"
+                  "LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON\n"
+                  "ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT\n"
+                  "(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS\n"
+                  "SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n");
    }
 };
 
@@ -1368,6 +1425,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       reshade::unregister_event<reshade::addon_event::map_buffer_region>(Persona5::OnMapBufferRegion);
       reshade::unregister_event<reshade::addon_event::update_buffer_region_command>(Persona5::OnUpdateBufferRegionCommand);
       reshade::unregister_event<reshade::addon_event::create_resource>(Persona5::OnCreateResource);
+      reshade::unregister_event<reshade::addon_event::bind_viewports>(Persona5::OnBindViewports);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);
