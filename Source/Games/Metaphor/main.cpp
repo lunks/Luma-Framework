@@ -10,6 +10,9 @@
 
 #include "ShaderPatches\ShaderPatches.h"
 #include "stretchy_buffer.h"
+#define XXH_STATIC_LINKING_ONLY
+#define XXH_IMPLEMENTATION
+#include "xxhash.h"
 
 enum class FramePhase
 {
@@ -63,7 +66,7 @@ struct GFD_VSCONST_OUTLINE_PREV_DATA
 
 struct TransformCacheEntry
 {
-   uint32_t transform_hash;
+   uint64_t transform_hash;
    float4x4 mtxLocalToWorldViewProj;
    float4x4 mtxLocalToWorld;
 };
@@ -92,6 +95,7 @@ namespace
    ShaderHashesList shader_hashes_smaa_edge_detection;
    ShaderHashesList shader_hashes_smaa_weight_calculation;
    ShaderHashesList shader_hashes_smaa_blending;
+   ShaderHashesList shader_hashes_lut;
    ShaderHashesList shader_hashes_outline;
 } // namespace
 
@@ -169,8 +173,8 @@ struct GameDeviceDataMetaphor final : public GameDeviceData
    uint2 target_resolution = {};
 
    // cache transform, swapped each frame
-   std::unordered_map<uint32_t, std::vector<TransformCacheEntry>> prev_transform_lookup;
-   std::unordered_map<uint32_t, std::vector<TransformCacheEntry>> transform_lookup;
+   std::unordered_map<uint64_t, std::vector<TransformCacheEntry>> prev_transform_lookup;
+   std::unordered_map<uint64_t, std::vector<TransformCacheEntry>> transform_lookup;
 
    // cache skinning data, swapped each frame
    std::unique_ptr<StretchyBuffer> prev_skin_buffer;
@@ -504,8 +508,8 @@ public:
       if (game_device_data.draw_device_context == nullptr)
       {
          std::unique_lock lock(game_device_data.draw_device_context_mutex);
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
          com_ptr<ID3D11RenderTargetView> render_target_views[4];
+         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
          native_device_context->OMGetRenderTargets(4, &render_target_views[0], &depth_stencil_view);
 
          if (!depth_stencil_view)
@@ -830,7 +834,7 @@ public:
             {
                auto hash_transform = [](float4x4 transform)
                {
-                  return compute_crc32((const uint8_t*)&transform.m30, 4 * sizeof(float));
+                  return XXH3_64bits((const uint8_t*)&transform.m30, 4 * sizeof(float));
                };
 
                auto hash_draw_call = [](uint64_t pixel_shader, ID3D11Buffer* vertex_buffer, uint32_t vertex_count)
@@ -839,11 +843,11 @@ public:
                   memcpy(&buffer[0], &pixel_shader, sizeof(pixel_shader));
                   memcpy(&buffer[sizeof(pixel_shader)], &vertex_buffer, sizeof(vertex_buffer));
                   memcpy(&buffer[sizeof(pixel_shader) + sizeof(vertex_buffer)], &vertex_count, sizeof(vertex_count));
-                  return compute_crc32(buffer, sizeof(buffer));
+                  return XXH3_64bits(buffer, sizeof(buffer));
                };
 
-               uint32_t draw_call_hash = hash_draw_call(original_shader_hashes.pixel_shaders[0], vertex_buffer.get(), max(last_draw_dispatch_data.index_count, last_draw_dispatch_data.vertex_count));
-               uint32_t transform_hash = hash_transform(vs_consts.mtxLocalToWorldViewProj);
+               uint64_t draw_call_hash = hash_draw_call(original_shader_hashes.pixel_shaders[0], vertex_buffer.get(), max(last_draw_dispatch_data.index_count, last_draw_dispatch_data.vertex_count));
+               uint64_t transform_hash = hash_transform(vs_consts.mtxLocalToWorldViewProj);
 
                auto& stored_transforms = game_device_data.transform_lookup[draw_call_hash];
                bool found = false;
@@ -864,7 +868,7 @@ public:
                if (it != game_device_data.prev_transform_lookup.cend() &&
                    it->second.size() > 0)
                {
-                  uint32_t prev_transform_hash = hash_transform(vs_consts.mtxLocalToWorldViewProjPrev);
+                  uint64_t prev_transform_hash = hash_transform(vs_consts.mtxLocalToWorldViewProjPrev);
 
                   TransformCacheEntry* cache_data = nullptr;
                   for (uint32_t i = 0; i < it->second.size(); ++i)
@@ -1014,9 +1018,8 @@ public:
             overrideType = DrawOrDispatchOverrideType::Replaced;
          }
       }
-
-      if (SrActive(device_data) &&
-          original_shader_hashes.Contains(shader_hashes_fxaa))
+      else if (SrActive(device_data) &&
+               original_shader_hashes.Contains(shader_hashes_fxaa))
       {
          com_ptr<ID3D11ShaderResourceView> srv;
          native_device_context->PSGetShaderResources(0, 1, &srv);
@@ -1062,6 +1065,30 @@ public:
 
             return DrawOrDispatchOverrideType::Skip;
          }
+      }
+      else if (original_shader_hashes.Contains(shader_hashes_lut))
+      {
+         // if there's no bloom or particle we use this as a second chance to inject super resolution
+         if (game_device_data.frame_phase == FramePhase::PARTICLES &&
+             SrActive(device_data) &&
+             game_device_data.depth_texture)
+         {
+            game_device_data.frame_phase = FramePhase::POSTPROCESSING_AND_UI;
+
+            com_ptr<ID3D11ShaderResourceView> srv;
+            native_device_context->PSGetShaderResources(0, 1, &srv);
+
+            com_ptr<ID3D11Resource> color_resource;
+            srv->GetResource(&color_resource);
+            color_resource->QueryInterface(&game_device_data.source_color);
+
+            SetupSr(native_device_context, game_device_data, device_data);
+
+            // split the command list since DLSS must be executed on an immediate context
+            native_device_context->FinishCommandList(TRUE, &game_device_data.partial_command_list);
+         }
+         ID3D11SamplerState* sampler = device_data.sampler_state_linear.get();
+         native_device_context->PSSetSamplers(0, 1, &sampler);
       }
 
       return overrideType;
@@ -1179,6 +1206,7 @@ public:
                native_device_context->Dispatch((game_device_data.render_resolution.x + 7) / 8, (game_device_data.render_resolution.y + 7) / 8, 1);
             }
 
+            if (game_device_data.sr_particle_texture)
             {
                com_ptr<ID3D11ShaderResourceView> particle_texture_srv;
                {
@@ -1207,7 +1235,7 @@ public:
                draw_data.output_color = game_device_data.resolve_texture.get();
                draw_data.motion_vectors = game_device_data.scaled_motion_vectors.get();
                draw_data.depth_buffer = game_device_data.sr_depth_texture.get();
-               draw_data.bias_mask = game_device_data.bias_mask.get();
+               draw_data.bias_mask = game_device_data.sr_particle_texture ? game_device_data.bias_mask.get() : nullptr;
                draw_data.pre_exposure = 0.0f;
                draw_data.jitter_x = game_device_data.sr_projection_jitters.x;
                draw_data.jitter_y = game_device_data.sr_projection_jitters.y;
@@ -1433,6 +1461,7 @@ public:
             else if (subobject.type == reshade::api::pipeline_subobject_type::blend_state)
             {
                auto* blend_desc = static_cast<reshade::api::blend_desc*>(subobjects[i].data);
+               blend_desc->blend_enable[5] = true;
                blend_desc->render_target_write_mask[5] = 15;
                return true;
             }
@@ -1451,6 +1480,32 @@ public:
    void PrintImGuiAbout() override
    {
       ImGui::Text("Metaphor Luma mod - about and credits section", "");
+      ImGui::Text("xxHash Library\n"
+                  "Copyright (c) 2012-2021 Yann Collet\n"
+                  "All rights reserved.\n"
+                  "\n"
+                  "BSD 2-Clause License (https://www.opensource.org/licenses/bsd-license.php)\n"
+                  "\n"
+                  "Redistribution and use in source and binary forms, with or without modification,\n"
+                  "are permitted provided that the following conditions are met:\n"
+                  "\n"
+                  "* Redistributions of source code must retain the above copyright notice, this\n"
+                  "  list of conditions and the following disclaimer.\n"
+                  "\n"
+                  "* Redistributions in binary form must reproduce the above copyright notice, this\n"
+                  "  list of conditions and the following disclaimer in the documentation and/or\n"
+                  "  other materials provided with the distribution.\n"
+                  "\n"
+                  "THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND\n"
+                  "ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED\n"
+                  "WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE\n"
+                  "DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR\n"
+                  "ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES\n"
+                  "(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;\n"
+                  "LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON\n"
+                  "ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT\n"
+                  "(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS\n"
+                  "SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n");
    }
 };
 
@@ -1475,6 +1530,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_smaa_edge_detection.pixel_shaders.emplace(std::stoul("8C9E5C72", nullptr, 16));
       shader_hashes_smaa_weight_calculation.pixel_shaders.emplace(std::stoul("CA15EAC0", nullptr, 16));
       shader_hashes_smaa_blending.pixel_shaders.emplace(std::stoul("5732C405", nullptr, 16));
+
+      shader_hashes_lut.pixel_shaders.emplace(std::stoul("D8196629", nullptr, 16));
 
       shader_hashes_outline.vertex_shaders.emplace(0xBF5FF106);
       shader_hashes_outline.vertex_shaders.emplace(0x155F917A);
