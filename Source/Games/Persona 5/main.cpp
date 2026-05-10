@@ -245,7 +245,11 @@ public:
    void LoadConfigs() override
    {
       reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "ShadowMapSizeOverride", g_shadow_map_size_override);
+      if (!reshade::get_config_value(runtime, NAME, "ShadowMapSizeOverride", g_shadow_map_size_override))
+      {
+          //older versions were saving the setting under the wrong key
+          reshade::get_config_value(runtime, NAME, "shadow_map_size_override", g_shadow_map_size_override);
+      }
    }
 
    void OnInitSwapchain(reshade::api::swapchain* swapchain) override
@@ -1299,7 +1303,27 @@ public:
 
       const char* previewString;
       char buffer[32];
-      if (g_shadow_map_size_override > 0)
+      if (g_shadow_map_size_override == 512)
+      {
+          previewString = "Very low - 512";
+      }
+      else if (g_shadow_map_size_override == 1024)
+      {
+          previewString = "Low - 1024";
+      }
+      else if (g_shadow_map_size_override == 2048)
+      {
+          previewString = "Middle - 2048";
+      }
+      else if (g_shadow_map_size_override == 4096)
+      {
+          previewString = "High - 4096";
+      }
+      else if (g_shadow_map_size_override == 8192)
+      {
+          previewString = "Very high - 8192";
+      }
+      else if (g_shadow_map_size_override > 0)
       {
          sprintf_s(buffer, 32, "%d", g_shadow_map_size_override);
          previewString = buffer;
@@ -1316,7 +1340,7 @@ public:
             if (ImGui::Selectable(name, selected))
             {
                g_shadow_map_size_override = size;
-               reshade::set_config_value(runtime, NAME, "shadow_map_size_override", g_shadow_map_size_override);
+               reshade::set_config_value(runtime, NAME, "ShadowMapSizeOverride", g_shadow_map_size_override);
             }
             if (selected)
             {
@@ -1325,16 +1349,16 @@ public:
          };
 
          AddComboItem("None", 0, true);
-         AddComboItem("512", 512, true);
-         AddComboItem("1024", 1024, true);
-         AddComboItem("2048", 2048, true);
-         AddComboItem("4096", 4096, true);
-         AddComboItem("8192", 8192, true);
+         AddComboItem("Very low - 512", 512, true);
+         AddComboItem("Low - 1024", 1024, true);
+         AddComboItem("Middle - 2048", 2048, true);
+         AddComboItem("High - 4096", 4096, true);
+         AddComboItem("Very high - 8192", 8192, true);
          ImGui::EndCombo();
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
-         ImGui::SetTooltip("Set ingame Shadow Quality to Middle. Requires restart/resetting Shadow Quality in settings.\nIn game settings:\nLow - 1024\nMiddle - 2048\nHigh - 4096");
+         ImGui::SetTooltip("Set ingame Shadow Quality to Middle (The shadow quality setting is broken and Middle is what ends up being used anyway, but just to make sure). Requires restart/resetting Shadow Quality in settings.");
       }
    }
 
