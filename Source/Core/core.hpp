@@ -2642,6 +2642,7 @@ namespace
       // TODO: add a flag to disable these for the "GRAPHICS_ANALYZER"? They are still needed for HDR though
       // Generally we want to add these flags in all cases, they seem to work in all games
       {
+#if !DISABLE_SWAPCHAIN_FLIP_MODEL
          desc.back_buffer_count = max(desc.back_buffer_count, 2); // Needed by flip models, which is mandatory for HDR. Note that DX10/11 will still only create one buffer, even if their desc says they have two.
          if ((swapchain_format_upgrade_type == TextureFormatUpgradesType::AllowedEnabled && swapchain_upgrade_type > SwapchainUpgradeType::None) || (desc.back_buffer.texture.format != reshade::api::format::r8g8b8a8_unorm_srgb && desc.back_buffer.texture.format != reshade::api::format::b8g8r8a8_unorm_srgb)) // sRGB formats don't support flip modes
          {
@@ -2654,6 +2655,7 @@ namespace
             }
 #endif
          }
+#endif
          ASSERT_ONCE((desc.present_flags & DXGI_SWAP_CHAIN_FLAG_FULLSCREEN_VIDEO) == 0); // Uh?
 
          if (desc.present_mode == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL || desc.present_mode == DXGI_SWAP_EFFECT_FLIP_DISCARD) // DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING requires flip model
