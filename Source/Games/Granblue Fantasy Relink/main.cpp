@@ -1473,10 +1473,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_Tonemap.pixel_shaders.emplace(std::stoul("60F0256B", nullptr, 16));
       shader_hashes_MotionBlur.pixel_shaders.emplace(std::stoul("45841F6D", nullptr, 16));
       shader_hashes_MotionBlurDenoise.pixel_shaders.emplace(std::stoul("199A3FBC", nullptr, 16));
-      shader_hashes_DoFCoCPrefilter.pixel_shaders.emplace(std::stoul("0BB781D8", nullptr, 16));
-      shader_hashes_DoFBokehGather.pixel_shaders.emplace(std::stoul("AA6346F2", nullptr, 16));
-      shader_hashes_DoFTemporalResolve.pixel_shaders.emplace(std::stoul("560B601E", nullptr, 16));
-      shader_hashes_DoFFinalComposite.pixel_shaders.emplace(std::stoul("F041F90A", nullptr, 16));
       shader_hashes_CutsceneGamma.pixel_shaders.emplace(std::stoul("1085E11F", nullptr, 16));
       shader_hashes_CutsceneColorGrade.pixel_shaders.emplace(std::stoul("50BE35B0", nullptr, 16));
       shader_hashes_CutsceneOverlayBlend.pixel_shaders.emplace(std::stoul("4517077B", nullptr, 16));

@@ -1,5 +1,5 @@
 #include "..\..\Core\core.hpp"
-#include "helper.hpp"
+#include "sig_helper.hpp"
 #include "hooks.hpp"
 
 namespace
