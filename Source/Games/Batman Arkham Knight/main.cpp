@@ -90,8 +90,8 @@ namespace
         if (enabled)
         {
             auto index = cb_luma_global_settings.FrameIndex % 8;
-            g_jitters.x = SR::HaltonSequence(index, 2) / renderer_resolution_x;
-            g_jitters.y = SR::HaltonSequence(index, 3) / renderer_resolution_y;
+            g_jitters.x = SR::HaltonSequence(index, 2) * 2.0f / renderer_resolution_x;
+            g_jitters.y = -SR::HaltonSequence(index, 3) * 2.0f / renderer_resolution_y;
         }
         else
         {
@@ -163,7 +163,7 @@ public:
             {
                 auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
                 auto& game_device_data = GetGameDeviceData(device_data);
-            
+
                 game_device_data.resource_mvs = resource;
             }
         }
@@ -232,9 +232,9 @@ public:
                 settings_data.hdr = true;
                 settings_data.mvs_jittered = true;
 
-                // MVs are in UV space so we need to scale them to screen space for DLSS.
-                settings_data.mvs_x_scale = device_data.render_resolution.x;
-                settings_data.mvs_y_scale = device_data.render_resolution.y;
+                // MVs are in [-1,1] range so we need to scale them to screen space for DLSS.
+                settings_data.mvs_x_scale = device_data.render_resolution.x * 0.5;
+                settings_data.mvs_y_scale = device_data.render_resolution.y * 0.5;
                 
                 settings_data.render_preset = dlss_render_preset;
                 settings_data.auto_exposure = true;
@@ -247,9 +247,9 @@ public:
                 draw_data.motion_vectors = game_device_data.resource_mvs.get();
                 draw_data.depth_buffer = game_device_data.resource_depth.get();
 
-                // Jitters are in UV offsets so we need to scale them to pixel offsets for DLSS.
-                draw_data.jitter_x = g_jitters.x * device_data.render_resolution.x;
-                draw_data.jitter_y = g_jitters.y * device_data.render_resolution.y * -1.0f;
+                // Jitters are in NDC offsets so we need to scale them to pixel offsets for DLSS.
+                draw_data.jitter_x = g_jitters.x * device_data.render_resolution.x * 0.5f;
+                draw_data.jitter_y = g_jitters.y * device_data.render_resolution.y * -0.5f;
 
                 draw_data.render_width = device_data.render_resolution.x;
                 draw_data.render_height = device_data.render_resolution.y;

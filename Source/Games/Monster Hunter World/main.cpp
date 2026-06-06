@@ -85,7 +85,7 @@ namespace
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-    inline void CreateConstantBuffer(ID3D11Device* device, UINT size, ID3D11Buffer** cb)
+    void CreateConstantBuffer(ID3D11Device* device, UINT size, ID3D11Buffer** cb)
     {
         D3D11_BUFFER_DESC desc = {};
         desc.ByteWidth = size;
@@ -95,7 +95,7 @@ namespace
         ensure(device->CreateBuffer(&desc, nullptr, cb), >= 0);
     }
 
-    inline void UpdateConstantBuffer(ID3D11DeviceContext* ctx, ID3D11Buffer* cb, const void* data, size_t size)
+    void UpdateConstantBuffer(ID3D11DeviceContext* ctx, ID3D11Buffer* cb, const void* data, size_t size)
     {
         D3D11_MAPPED_SUBRESOURCE mapped_subresource;
         ensure(ctx->Map(cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_subresource), >= 0);
