@@ -2,12 +2,28 @@
 
 #include "shared.h"
 
-// Quantum Break's SR hook sits inside the temporal resolve path:
-// history reprojection provides motion vectors, temporal resolve provides color/depth/cbuffer inputs,
-// and a fullscreen pre-decode pass lets DLSS run on linear color while the game remains gamma-space.
+// Quantum Break's SR hook is assembled from several stable Remedy passes:
+// - 0xA43343D6 "Depth Linearization" reads clip/device depth from PS SRV0 and writes linear depth to RTV0.
+//   We cache the PS SRV0 input, not the linearized RTV output, so SR receives pre-linearized depth.
+// - 0xE8337D48 "History Reprojection" reads the geometry velocity texture from CS SRV0.
+// - 0x99274617 "Temporal Resolve" is the SR insertion point. It provides source color in PS SRV2,
+//   final output in OM RTV0, temporal cbuffer data in PS CB0/CB1, and a same-depth fallback in PS SRV0.
+// - Luma_QB_PreSRDecode converts QB's gamma-space temporal source color to linear before DLSS/FSR.
 namespace QuantumBreakUpscaling
 {
-   // Pass hashes used to identify the two parts of QB's temporal pipeline we need to observe/replace.
+   constexpr uint32_t hash_depth_linearization = 0xA43343D6u;
+   constexpr uint32_t hash_history_reprojection = 0xE8337D48u;
+   constexpr uint32_t hash_temporal_resolve = 0x99274617u;
+   constexpr uint32_t hash_msaa_gbuffer_reconstruction = 0x037FCE62u;
+   constexpr uint32_t hash_msaa_gbuffer_depth_resolve = 0x84DD3C0Cu;
+
+   // Pass hashes used to identify the parts of QB's depth/temporal pipeline we need to observe/replace.
+   inline ShaderHashesList<>& DepthLinearizationHashes()
+   {
+      static ShaderHashesList<> hashes;
+      return hashes;
+   }
+
    inline ShaderHashesList<>& HistoryReprojectionHashes()
    {
       static ShaderHashesList<> hashes;
@@ -22,8 +38,22 @@ namespace QuantumBreakUpscaling
 
    inline void RegisterShaderHashes()
    {
-      HistoryReprojectionHashes().compute_shaders.emplace(std::stoul("E8337D48", nullptr, 16));
-      TemporalResolveHashes().pixel_shaders.emplace(std::stoul("99274617", nullptr, 16));
+      DepthLinearizationHashes().pixel_shaders.emplace(hash_depth_linearization);
+      HistoryReprojectionHashes().compute_shaders.emplace(hash_history_reprojection);
+      TemporalResolveHashes().pixel_shaders.emplace(hash_temporal_resolve);
+
+#if DEVELOPMENT
+      forced_shader_names.emplace(hash_depth_linearization, "QB Depth Linearization (Clip Depth -> Linear Depth)");
+      forced_shader_names.emplace(hash_history_reprojection, "QB History Reprojection (Motion Vectors)");
+      forced_shader_names.emplace(hash_temporal_resolve, "QB Temporal Resolve / TAA");
+      forced_shader_names.emplace(hash_msaa_gbuffer_reconstruction, "QB MSAA GBuffer Reconstruction Mask");
+      forced_shader_names.emplace(hash_msaa_gbuffer_depth_resolve, "QB MSAA GBuffer Depth Resolve");
+#endif
+   }
+
+   inline bool IsDepthLinearizationPass(const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes)
+   {
+      return original_shader_hashes.Contains(DepthLinearizationHashes());
    }
 
    inline bool IsHistoryReprojectionPass(const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes)
@@ -37,22 +67,35 @@ namespace QuantumBreakUpscaling
    }
 
    constexpr float vertical_fov_fallback = 0.775934f; // ~44.46 degrees
+   // Counted in valid scene temporal-resolve draws, not seconds. DLSS is held off for this many
+   // resolves after startup/loading/no-scene periods so QB's AA-off scene transition can stabilize.
+   constexpr uint32_t dlss_scene_warmup_resolve_count = 120u;
    // Byte offsets into QB's cb_update_1 cbuffer for the SR inputs that are not available from textures.
    constexpr uint32_t cb_update_1_inv_near_offset = 47u * 16u;
    constexpr uint32_t cb_update_1_view_to_clip_offset = 10u * 16u;
    constexpr uint32_t cb_update_1_tess_view_to_clip_11_offset = 112u * 16u + 12u;
    constexpr uint32_t cb_update_1_jitter_offset = 121u * 16u;
    constexpr uint32_t cb_update_1_min_size = cb_update_1_jitter_offset + sizeof(float) * 2u;
-   // The temporal resolve samples current color with g_vSSAAJitterOffset[0].
+   // The temporal resolve samples current color with g_vSSAAJitterOffset[0], directly added to UVs.
+   // Logged scene frames repeat a 4-sample raw UV pattern:
+   //   ( 0.00014648, -0.00008681), (-0.00014648,  0.00008681),
+   //   ( 0.00004883,  0.00026042), (-0.00004883, -0.00026042).
+   // At 2560x1440, observed when QB's own upscaling is enabled for 4K output,
+   // this becomes roughly (0.375, 0.125), (-0.375, -0.125),
+   // (0.125, -0.375), (-0.125, 0.375) render pixels after the SR Y flip.
    constexpr uint32_t ssaa_jitter_offset = 12u * 16u;
    constexpr uint32_t ssaa_min_size = ssaa_jitter_offset + sizeof(float) * 2u;
 
    struct Data
    {
       bool debug_prev_had_motion_vectors = false;
+      bool debug_prev_had_clip_depth = false;
+      bool debug_prev_used_cached_clip_depth = false;
 
 #if ENABLE_SR
       // Resources captured or created around the temporal resolve pass.
+      // sr_clip_depth is captured from 0xA43343D6 PS SRV0, the pre-linearized clip/device depth.
+      com_ptr<ID3D11Resource> sr_clip_depth;
       com_ptr<ID3D11Resource> sr_motion_vectors;
       com_ptr<ID3D11Buffer> cb_update_1_readback;
       com_ptr<ID3D11Buffer> ssaa_readback;
@@ -67,6 +110,8 @@ namespace QuantumBreakUpscaling
       float sr_jitter_y = 0.f;
       float sr_cb_jitter_x = 0.f;
       float sr_cb_jitter_y = 0.f;
+      float sr_render_pixel_jitter_x = 0.f;
+      float sr_render_pixel_jitter_y = 0.f;
       float sr_vertical_fov = vertical_fov_fallback;
       float sr_near_plane = 0.1f;
       float sr_far_plane = 1000.f;
@@ -74,9 +119,12 @@ namespace QuantumBreakUpscaling
       // Per-resource history used to decide when DLSS history must reset.
       bool has_ssaa_data = false;
       bool output_changed = false;
+      bool has_sr_clip_depth_desc = false;
+      bool used_cached_clip_depth = false;
       bool has_previous_source_desc = false;
       bool has_previous_depth_desc = false;
       bool has_previous_motion_vectors_desc = false;
+      D3D11_TEXTURE2D_DESC sr_clip_depth_desc = {};
       D3D11_TEXTURE2D_DESC previous_source_desc = {};
       D3D11_TEXTURE2D_DESC previous_depth_desc = {};
       D3D11_TEXTURE2D_DESC previous_motion_vectors_desc = {};
@@ -84,6 +132,10 @@ namespace QuantumBreakUpscaling
       uint32_t previous_render_height = 0u;
       uint32_t previous_output_width = 0u;
       uint32_t previous_output_height = 0u;
+      // DLSS transition state. previous_sr_type detects switching into DLSS; dlss_scene_warmup_remaining
+      // also gets refreshed by no-scene frames so DLSS does not start on the first unstable gameplay resolves.
+      uint32_t dlss_scene_warmup_remaining = 0u;
+      SR::Type previous_sr_type = SR::Type::None;
 #endif
    };
 
@@ -168,7 +220,9 @@ namespace QuantumBreakUpscaling
       }
 
       const float fov = 2.f * std::atan(1.f / abs_projection_scale);
-      return (std::isfinite(fov) && fov > 0.f && fov < 3.13f) ? fov : 0.f;
+      // Loading/menu variants of QB's temporal resolve can expose non-scene constants that decode to a
+      // technically positive but effectively zero FOV. Do not feed those into DLSS; keep the previous/fallback FOV.
+      return (std::isfinite(fov) && fov >= 0.1f && fov < 3.13f) ? fov : 0.f;
    }
 
    inline bool HasTextureShapeChanged(const D3D11_TEXTURE2D_DESC& current_desc, const D3D11_TEXTURE2D_DESC& previous_desc)
@@ -215,6 +269,62 @@ namespace QuantumBreakUpscaling
 #else
       (void)device_data;
       return false;
+#endif
+   }
+
+   inline void CaptureClipDepthFromLinearizationPass(ID3D11DeviceContext* native_device_context, Data& data)
+   {
+#if ENABLE_SR
+      if (native_device_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+      {
+         return;
+      }
+
+      // 0xA43343D6 converts clip/device depth to linear depth:
+      //   PS SRV0 = pre-linearized clip depth, viewed as r32_float on an r32_typeless resource.
+      //   RTV0    = linearized r16_float depth output.
+      // SR wants the PS SRV0 input, not the RTV0 output. The pass can run at full/half/quarter res,
+      // so keep the largest depth seen this frame to avoid replacing the main depth with downscaled copies.
+      com_ptr<ID3D11ShaderResourceView> clip_depth_srv;
+      native_device_context->PSGetShaderResources(0, 1, &clip_depth_srv);
+      if (!clip_depth_srv.get())
+      {
+         return;
+      }
+
+      com_ptr<ID3D11Resource> clip_depth_resource;
+      clip_depth_srv->GetResource(&clip_depth_resource);
+      if (!clip_depth_resource.get())
+      {
+         return;
+      }
+
+      com_ptr<ID3D11Texture2D> clip_depth_texture;
+      if (FAILED(clip_depth_resource->QueryInterface(&clip_depth_texture)) || !clip_depth_texture.get())
+      {
+         return;
+      }
+
+      D3D11_TEXTURE2D_DESC clip_depth_desc = {};
+      clip_depth_texture->GetDesc(&clip_depth_desc);
+      if (clip_depth_desc.Width == 0u || clip_depth_desc.Height == 0u)
+      {
+         return;
+      }
+
+      const uint64_t current_area = static_cast<uint64_t>(clip_depth_desc.Width) * static_cast<uint64_t>(clip_depth_desc.Height);
+      const uint64_t previous_area = data.has_sr_clip_depth_desc
+                                        ? (static_cast<uint64_t>(data.sr_clip_depth_desc.Width) * static_cast<uint64_t>(data.sr_clip_depth_desc.Height))
+                                        : 0ull;
+      if (!data.sr_clip_depth.get() || current_area > previous_area)
+      {
+         data.sr_clip_depth = clip_depth_resource;
+         data.sr_clip_depth_desc = clip_depth_desc;
+         data.has_sr_clip_depth_desc = true;
+      }
+#else
+      (void)native_device_context;
+      (void)data;
 #endif
    }
 
@@ -335,7 +445,8 @@ namespace QuantumBreakUpscaling
 
    inline bool CaptureSSAAData(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, Data& data)
    {
-      // The temporal resolve samples current color with g_vSSAAJitterOffset[0], so keep this as the jitter source.
+      // Prefer the temporal resolve's SSAA jitter over cb_update_1. It is the exact UV offset
+      // used for the current color/depth sample, and the captured values identify QB's 4-sample pattern.
       data.has_ssaa_data = false;
       data.sr_jitter_x = 0.f;
       data.sr_jitter_y = 0.f;
@@ -533,6 +644,14 @@ namespace QuantumBreakUpscaling
       result.requested = IsRequested(device_data);
 
 #if ENABLE_SR
+      data.used_cached_clip_depth = false;
+      // Switching into DLSS is equivalent to a fresh scene start for DLSS history purposes.
+      if (data.previous_sr_type != device_data.sr_type)
+      {
+         data.previous_sr_type = device_data.sr_type;
+         data.dlss_scene_warmup_remaining = device_data.sr_type == SR::Type::DLSS ? dlss_scene_warmup_resolve_count : 0u;
+      }
+
       com_ptr<ID3D11ShaderResourceView> ps_shader_resources[3];
       com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
       com_ptr<ID3D11DepthStencilView> depth_stencil_view;
@@ -550,10 +669,38 @@ namespace QuantumBreakUpscaling
          return ps_shader_resources[0].get() && ps_shader_resources[2].get() && render_target_views[0].get();
       }();
 
+      bool captured_cb_update_1 = false;
+      bool captured_ssaa = false;
       if (has_main_temporal_resolve_bindings)
       {
-         CaptureCBUpdate1Data(native_device, native_device_context, data);
-         CaptureSSAAData(native_device, native_device_context, data);
+         // These constant buffers distinguish the real scene temporal resolve from transition variants
+         // that use the same shader/resources but do not carry valid scene camera/jitter state.
+         captured_cb_update_1 = CaptureCBUpdate1Data(native_device, native_device_context, data);
+         captured_ssaa = CaptureSSAAData(native_device, native_device_context, data);
+      }
+
+      if (result.requested && has_main_temporal_resolve_bindings && !captured_cb_update_1 && !captured_ssaa)
+      {
+         // Loading-to-gameplay transition resolves can bind scene-looking resources without the scene
+         // constant buffers. Do not run SR, and do not replay the draw through the post-SR resolve path.
+         device_data.force_reset_sr = true;
+         if (cb_luma_global_settings.SRType != 0u)
+         {
+            cb_luma_global_settings.SRType = 0u;
+            device_data.cb_luma_global_settings_dirty = true;
+         }
+         result.stop_processing = true;
+         return result;
+      }
+
+      if (result.requested && device_data.sr_type == SR::Type::DLSS && has_main_temporal_resolve_bindings && captured_cb_update_1 && captured_ssaa && data.dlss_scene_warmup_remaining > 0u)
+      {
+         // This is not a wall-clock delay: it consumes one count per valid scene temporal resolve.
+         // During the warmup, QB's own temporal resolve runs normally and DLSS history is kept reset.
+         --data.dlss_scene_warmup_remaining;
+         device_data.force_reset_sr = true;
+         result.requested = false;
+         return result;
       }
 
       if (result.requested && immediate_context && data.sr_motion_vectors.get() && has_main_temporal_resolve_bindings)
@@ -563,8 +710,11 @@ namespace QuantumBreakUpscaling
             com_ptr<ID3D11Resource> source_color_resource;
             ps_shader_resources[2]->GetResource(&source_color_resource);
 
-            com_ptr<ID3D11Resource> depth_resource;
-            ps_shader_resources[0]->GetResource(&depth_resource);
+            // Fallback depth from temporal resolve PS SRV0. Shader 0x99274617 names this g_tClipDepth.
+            // Prefer the cached 0xA43343D6 PS SRV0 resource below when it matches the main render size,
+            // because that cache point explicitly proves the resource is pre-linearized depth.
+            com_ptr<ID3D11Resource> temporal_resolve_depth_resource;
+            ps_shader_resources[0]->GetResource(&temporal_resolve_depth_resource);
 
             // The temporal resolve RTV is the final SR output target size.
             com_ptr<ID3D11Resource> output_resource;
@@ -572,37 +722,56 @@ namespace QuantumBreakUpscaling
 
             com_ptr<ID3D11Texture2D> source_color_texture;
             com_ptr<ID3D11Texture2D> output_texture;
-            com_ptr<ID3D11Texture2D> depth_texture;
+            com_ptr<ID3D11Texture2D> temporal_resolve_depth_texture;
             com_ptr<ID3D11Texture2D> motion_vectors_texture;
 
             const HRESULT source_hr = source_color_resource.get() ? source_color_resource->QueryInterface(&source_color_texture) : E_FAIL;
             const HRESULT output_hr = output_resource.get() ? output_resource->QueryInterface(&output_texture) : E_FAIL;
-            const HRESULT depth_hr = depth_resource.get() ? depth_resource->QueryInterface(&depth_texture) : E_FAIL;
+            const HRESULT temporal_depth_hr = temporal_resolve_depth_resource.get() ? temporal_resolve_depth_resource->QueryInterface(&temporal_resolve_depth_texture) : E_FAIL;
             const HRESULT motion_vectors_hr = data.sr_motion_vectors.get() ? data.sr_motion_vectors->QueryInterface(&motion_vectors_texture) : E_FAIL;
 
-            if (SUCCEEDED(source_hr) && SUCCEEDED(output_hr) && SUCCEEDED(depth_hr) && SUCCEEDED(motion_vectors_hr) && source_color_texture.get() && output_texture.get() && depth_texture.get() && motion_vectors_texture.get())
+            if (SUCCEEDED(source_hr) && SUCCEEDED(output_hr) && SUCCEEDED(temporal_depth_hr) && SUCCEEDED(motion_vectors_hr) && source_color_texture.get() && output_texture.get() && temporal_resolve_depth_texture.get() && motion_vectors_texture.get())
             {
                // Descs drive DLSS settings, conversion texture allocation, and history reset decisions.
                D3D11_TEXTURE2D_DESC source_desc = {};
+               D3D11_TEXTURE2D_DESC temporal_resolve_depth_desc = {};
                D3D11_TEXTURE2D_DESC depth_desc = {};
                D3D11_TEXTURE2D_DESC motion_vectors_desc = {};
                D3D11_TEXTURE2D_DESC output_desc = {};
                // Source/depth/MV descs bound the DLSS input resolution; output desc drives the upscaled target.
                source_color_texture->GetDesc(&source_desc);
-               depth_texture->GetDesc(&depth_desc);
+               temporal_resolve_depth_texture->GetDesc(&temporal_resolve_depth_desc);
                motion_vectors_texture->GetDesc(&motion_vectors_desc);
                output_texture->GetDesc(&output_desc);
 
-               if (SetupOutput(native_device, device_data, data, output_desc))
+               ID3D11Resource* sr_depth_resource = temporal_resolve_depth_resource.get();
+               depth_desc = temporal_resolve_depth_desc;
+
+               // The depth-linearization pass can also produce half/quarter-res linear-depth copies.
+               // Only use the cached clip-depth input if it matches the main color and MV size for this SR draw;
+               // otherwise keep the temporal resolve PS SRV0 fallback, which is also named g_tClipDepth.
+               if (data.sr_clip_depth.get() && data.has_sr_clip_depth_desc &&
+                   data.sr_clip_depth_desc.Width == source_desc.Width &&
+                   data.sr_clip_depth_desc.Height == source_desc.Height &&
+                   data.sr_clip_depth_desc.Width == motion_vectors_desc.Width &&
+                   data.sr_clip_depth_desc.Height == motion_vectors_desc.Height)
+               {
+                  sr_depth_resource = data.sr_clip_depth.get();
+                  depth_desc = data.sr_clip_depth_desc;
+                  data.used_cached_clip_depth = true;
+               }
+
+               const bool output_ready = SetupOutput(native_device, device_data, data, output_desc);
+               if (output_ready)
                {
                   auto* sr_instance_data = device_data.GetSRInstanceData();
                   if (sr_instance_data)
                   {
-                     // Use the smallest SR input texture so color, depth, and motion vectors cover the full render area.
-                     const uint32_t max_input_width = (std::min)(source_desc.Width, (std::min)(depth_desc.Width, motion_vectors_desc.Width));
-                     const uint32_t max_input_height = (std::min)(source_desc.Height, (std::min)(depth_desc.Height, motion_vectors_desc.Height));
-                     const uint32_t render_width = max_input_width;
-                     const uint32_t render_height = max_input_height;
+                     // Use the smallest SR input texture so color, depth, and motion vectors all cover the full render area.
+                     const uint32_t input_width = (std::min)(source_desc.Width, (std::min)(depth_desc.Width, motion_vectors_desc.Width));
+                     const uint32_t input_height = (std::min)(source_desc.Height, (std::min)(depth_desc.Height, motion_vectors_desc.Height));
+                     const uint32_t render_width = input_width;
+                     const uint32_t render_height = input_height;
 
                      const uint32_t output_width = output_desc.Width;
                      const uint32_t output_height = output_desc.Height;
@@ -614,6 +783,22 @@ namespace QuantumBreakUpscaling
                         device_data.force_reset_sr = true;
                         result.stop_processing = true;
                         return result;
+                     }
+
+                     // g_vSSAAJitterOffset[0] is a normalized UV offset; shader 0x99274617 adds it directly to sampling UVs.
+                     // Convert UV -> input pixels for DLSS/FSR and flip Y to match SR convention. Do not apply
+                     // projection/NDC-style *0.5f scaling here; that would make the logged pattern half-strength.
+                     if (data.has_ssaa_data)
+                     {
+                        data.sr_render_pixel_jitter_x = jitter_x * static_cast<float>(render_width);
+                        data.sr_render_pixel_jitter_y = -jitter_y * static_cast<float>(render_height);
+                     }
+                     else
+                     {
+                        // Fallback g_vJitterOffset is not the temporal resolve sample offset. Captured scene frames had it
+                        // at zero, and other QB shaders add it to SV_Position, so treat it as already pixel-space if used.
+                        data.sr_render_pixel_jitter_x = jitter_x;
+                        data.sr_render_pixel_jitter_y = -jitter_y;
                      }
 
                      Settings::SetRenderData(render_width, render_height, output_width, output_height, jitter_x, jitter_y, device_data);
@@ -662,11 +847,11 @@ namespace QuantumBreakUpscaling
                         draw_data.source_color = data.sr_linear_input_color.get();
                         draw_data.output_color = device_data.sr_output_color.get();
                         draw_data.motion_vectors = data.sr_motion_vectors.get();
-                        draw_data.depth_buffer = depth_resource.get();
+                        draw_data.depth_buffer = sr_depth_resource;
                         draw_data.pre_exposure = 1.f;
-                        draw_data.jitter_x = jitter_x * Settings::jitter_scale;
-                        draw_data.jitter_y = jitter_y * Settings::jitter_scale;
-                        draw_data.vert_fov = (std::isfinite(data.sr_vertical_fov) && data.sr_vertical_fov > 0.f)
+                        draw_data.jitter_x = data.sr_render_pixel_jitter_x * Settings::jitter_scale;
+                        draw_data.jitter_y = data.sr_render_pixel_jitter_y * Settings::jitter_scale;
+                        draw_data.vert_fov = (std::isfinite(data.sr_vertical_fov) && data.sr_vertical_fov >= 0.1f)
                                                 ? data.sr_vertical_fov
                                                 : vertical_fov_fallback;
                         draw_data.near_plane = data.sr_near_plane;
@@ -691,7 +876,12 @@ namespace QuantumBreakUpscaling
                            source_desc.Width,
                            source_desc.Height);
 
-                        result.succeeded = pre_sr_encoded && sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
+                        bool sr_drawn = false;
+                        if (pre_sr_encoded)
+                        {
+                           sr_drawn = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
+                        }
+                        result.succeeded = pre_sr_encoded && sr_drawn;
 
                         {
                            ID3D11ShaderResourceView* null_srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
@@ -775,19 +965,26 @@ namespace QuantumBreakUpscaling
    {
 #if ENABLE_SR
       // Drop all transient SR resources so the next valid scene frame rebuilds them and resets DLSS history.
+      // If DLSS is currently selected, the rebuild is also treated as a fresh scene warmup.
       device_data.force_reset_sr = true;
       device_data.has_drawn_sr = false;
 
+      data.sr_clip_depth = nullptr;
       data.sr_motion_vectors = nullptr;
       data.sr_linear_input_color = nullptr;
       data.sr_linear_input_color_srv = nullptr;
       data.sr_linear_input_color_rtv = nullptr;
       data.sr_output_color_srv = nullptr;
       data.output_changed = false;
+      data.has_sr_clip_depth_desc = false;
+      data.used_cached_clip_depth = false;
+      data.sr_render_pixel_jitter_x = 0.f;
+      data.sr_render_pixel_jitter_y = 0.f;
 
       data.has_previous_source_desc = false;
       data.has_previous_depth_desc = false;
       data.has_previous_motion_vectors_desc = false;
+      data.sr_clip_depth_desc = {};
       data.previous_source_desc = {};
       data.previous_depth_desc = {};
       data.previous_motion_vectors_desc = {};
@@ -795,6 +992,7 @@ namespace QuantumBreakUpscaling
       data.previous_render_height = 0u;
       data.previous_output_width = 0u;
       data.previous_output_height = 0u;
+      data.dlss_scene_warmup_remaining = device_data.sr_type == SR::Type::DLSS ? dlss_scene_warmup_resolve_count : 0u;
 #else
       (void)device_data;
       (void)data;
@@ -804,17 +1002,35 @@ namespace QuantumBreakUpscaling
    inline void OnPresent(DeviceData& device_data, Data& data)
    {
 #if ENABLE_SR
+      const bool had_clip_depth = data.sr_clip_depth.get() != nullptr;
+      const bool had_motion_vectors = data.sr_motion_vectors.get() != nullptr;
+
       // If SR was requested but no scene resolve produced SR output, force a history reset for the next scene frame.
       if (device_data.sr_type != SR::Type::None && !device_data.has_drawn_sr)
       {
          device_data.force_reset_sr = true;
       }
 
+      if (device_data.sr_type == SR::Type::DLSS && !device_data.has_drawn_sr && !had_clip_depth && !had_motion_vectors)
+      {
+         // Title/loading/UI-only frames do not provide a real scene depth/MV pair. Refresh the DLSS warmup
+         // so DLSS waits for stable gameplay resolves once scene rendering resumes.
+         data.dlss_scene_warmup_remaining = (std::max)(data.dlss_scene_warmup_remaining, dlss_scene_warmup_resolve_count);
+      }
+
+      data.debug_prev_had_clip_depth = data.sr_clip_depth.get() != nullptr;
       data.debug_prev_had_motion_vectors = data.sr_motion_vectors.get() != nullptr;
+      data.debug_prev_used_cached_clip_depth = data.used_cached_clip_depth;
+      data.sr_clip_depth = nullptr;
       data.sr_motion_vectors = nullptr;
+      data.has_sr_clip_depth_desc = false;
+      data.sr_clip_depth_desc = {};
+      data.used_cached_clip_depth = false;
       data.output_changed = false;
 #else
+      data.debug_prev_had_clip_depth = false;
       data.debug_prev_had_motion_vectors = false;
+      data.debug_prev_used_cached_clip_depth = false;
       (void)device_data;
 #endif
 
@@ -877,7 +1093,9 @@ namespace QuantumBreakUpscaling
          {
             table_row_bool("History Reprojection Pass Seen:", saw_history_reprojection_pass);
             table_row_bool("Temporal Resolve Pass Seen:", saw_temporal_resolve_pass);
+            table_row_bool("Clip Depth Captured:", data.debug_prev_had_clip_depth);
             table_row_bool("Motion Vectors Captured:", data.debug_prev_had_motion_vectors);
+            table_row_bool("Cached Clip Depth Used For SR:", data.debug_prev_used_cached_clip_depth);
             table_row_bool("Had Scene Temporal Resolve Last Frame:", had_scene_temporal_resolve_last_frame);
             table_row_uint("UI-Only Hold Frames:", ui_only_frame_hold_counter);
             ImGui::EndTable();
@@ -892,6 +1110,13 @@ namespace QuantumBreakUpscaling
             table_row_uint("Last SR Render Height:", data.previous_render_height);
             table_row_uint("Last SR Output Width:", data.previous_output_width);
             table_row_uint("Last SR Output Height:", data.previous_output_height);
+            table_row_bool("Using SSAA Jitter Source:", data.has_ssaa_data);
+            table_row_float("Last Raw SSAA Jitter X:", data.sr_jitter_x);
+            table_row_float("Last Raw SSAA Jitter Y:", data.sr_jitter_y);
+            table_row_float("Last Raw CB Jitter X:", data.sr_cb_jitter_x);
+            table_row_float("Last Raw CB Jitter Y:", data.sr_cb_jitter_y);
+            table_row_float("Last SR Pixel Jitter X:", data.sr_render_pixel_jitter_x);
+            table_row_float("Last SR Pixel Jitter Y:", data.sr_render_pixel_jitter_y);
             table_row_float("Active MV Scale Multiplier:", Settings::mv_scale);
             table_row_float("Active Jitter Scale Multiplier:", Settings::jitter_scale);
             ImGui::EndTable();

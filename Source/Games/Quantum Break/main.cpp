@@ -354,6 +354,13 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
+      if (QuantumBreakUpscaling::IsDepthLinearizationPass(original_shader_hashes))
+      {
+         QuantumBreakUpscaling::CaptureClipDepthFromLinearizationPass(native_device_context, game_device_data.upscaling);
+
+         return DrawOrDispatchOverrideType::None;
+      }
+
       if (QuantumBreakUpscaling::IsHistoryReprojectionPass(original_shader_hashes))
       {
          game_device_data.saw_history_reprojection_pass = true;
@@ -375,7 +382,10 @@ public:
       const auto sr_result = QuantumBreakUpscaling::RunTemporalResolve(native_device, native_device_context, device_data, game_device_data.upscaling);
       if (sr_result.stop_processing)
       {
-         return DrawOrDispatchOverrideType::None;
+         // Some loading-to-gameplay temporal-resolve variants bind color/depth/MV but not QB's scene
+         // constant buffers. Running or replaying that draw after DLSS work can hang the D3D device, so
+         // drop it and wait for the next proper scene temporal resolve.
+         return DrawOrDispatchOverrideType::Skip;
       }
 
       QuantumBreakUpscaling::SetSRTypeForTemporalResolve(device_data, sr_result.succeeded);
