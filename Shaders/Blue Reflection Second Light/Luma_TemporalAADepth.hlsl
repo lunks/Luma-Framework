@@ -49,6 +49,16 @@ float LoadDepth(int2 pos)
     return t_DepthMap.Load(int3(pos, 0));
 }
 
+float LoadSharedDepth(uint index)
+{
+    return g_SharedDepth[min(index, TILESIZE_X * TILESIZE_Y - 1)];
+}
+
+void StoreSharedDepth(uint index, float value)
+{
+	g_SharedDepth[min(index, TILESIZE_X * TILESIZE_Y - 1)] = value;
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -65,7 +75,7 @@ void main(
     uint local_x = groupIndex % TILESIZE_X;
     int2 tile_origin = int2(groupID.xy * uint2(NUMTHREADS_X, NUMTHREADS_Y)) - 1;
 	
-	g_SharedDepth[local_y * TILESIZE_X + local_x] = LoadDepth(tile_origin + int2(local_x, local_y));
+	StoreSharedDepth(local_y * TILESIZE_X + local_x, LoadDepth(tile_origin + int2(local_x, local_y)));
 	
     if (groupIndex < BORDER_COUNT)
     {
@@ -74,7 +84,7 @@ void main(
         uint extra_y = extra_index / TILESIZE_X;
         uint extra_x = extra_index % TILESIZE_X;
 
-        g_SharedDepth[extra_y * TILESIZE_X + extra_x] = LoadDepth(tile_origin + int2(extra_x, extra_y));
+		StoreSharedDepth(extra_y * TILESIZE_X + extra_x, LoadDepth(tile_origin + int2(extra_x, extra_y)));
     }
 
 	GroupMemoryBarrierWithGroupSync();
@@ -90,17 +100,17 @@ void main(
     uint sx = groupThread.x + 1;
     uint sy = groupThread.y + 1;
 
-    float a = g_SharedDepth[(sy - 1) * TILESIZE_X + (sx - 1)];
-    float b = g_SharedDepth[(sy - 1) * TILESIZE_X + (sx    )];
-    float c = g_SharedDepth[(sy - 1) * TILESIZE_X + (sx + 1)];
+    float a = LoadSharedDepth((sy - 1) * TILESIZE_X + (sx - 1));
+    float b = LoadSharedDepth((sy - 1) * TILESIZE_X + (sx    ));
+    float c = LoadSharedDepth((sy - 1) * TILESIZE_X + (sx + 1));
 
-    float d = g_SharedDepth[(sy    ) * TILESIZE_X + (sx - 1)];
-    float e = g_SharedDepth[(sy    ) * TILESIZE_X + (sx    )];
-    float f = g_SharedDepth[(sy    ) * TILESIZE_X + (sx + 1)];
+    float d = LoadSharedDepth((sy    ) * TILESIZE_X + (sx - 1));
+    float e = LoadSharedDepth((sy    ) * TILESIZE_X + (sx    ));
+    float f = LoadSharedDepth((sy    ) * TILESIZE_X + (sx + 1));
 
-    float g = g_SharedDepth[(sy + 1) * TILESIZE_X + (sx - 1)];
-    float h = g_SharedDepth[(sy + 1) * TILESIZE_X + (sx    )];
-    float i = g_SharedDepth[(sy + 1) * TILESIZE_X + (sx + 1)];
+    float g = LoadSharedDepth((sy + 1) * TILESIZE_X + (sx - 1));
+    float h = LoadSharedDepth((sy + 1) * TILESIZE_X + (sx    ));
+    float i = LoadSharedDepth((sy + 1) * TILESIZE_X + (sx + 1));
 	
 	float neighbor_min = min(min(min(b, d), min(e, f)), h);
 	float neighbor_max = max(max(max(b, d), max(e, f)), h);
@@ -131,7 +141,7 @@ void main(
 	
 	float2 velocity = t_VelocityMap.SampleLevel(s_samplLinearClamp, uv, 0).xy * VelocityScale;
 	
-	float velocity_length = saturate( (abs(velocity.x * 2.0f * ScreenInfo.z) + abs(velocity.y * 2.0f * ScreenInfo.w)) * 2.0f );
+	float velocity_length = saturate( (abs(velocity.x * 2.0f * ScreenInfo.x) + abs(velocity.y * 2.0f * ScreenInfo.y)) * 2.0f );
 	
 	float history_depth = t_TemporalDepthPrevMap.SampleLevel(s_samplPointClamp, uv + velocity, 0);
 	
