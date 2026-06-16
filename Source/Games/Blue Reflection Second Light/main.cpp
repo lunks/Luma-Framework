@@ -129,7 +129,7 @@ namespace MotionBlur
       }
    };
    
-   enum class MotionBlurTexture
+   enum class Texture
    {
       VelocityBuffer,
       Tile2,
@@ -157,7 +157,7 @@ namespace MotionBlur
       int sample_count = 10;
    };
    
-   struct CBufferData
+   struct alignas(16) CBufferData
    {
       float VelocityScale;
       float MaxBlurRadius;
@@ -176,7 +176,7 @@ namespace MotionBlur
       float4 DepthParams = {0.0, 0.0, 0.0, 1.0};
    };
    
-   struct MotionBlurResource
+   struct Resource
    {
       ComPtr<ID3D11Texture2D> tex;
       ComPtr<ID3D11ShaderResourceView> srv;
@@ -269,7 +269,7 @@ namespace MotionBlur
          // VelocityBuffer
          ID3D11SamplerState* ps_samplers[2] = {linear_sampler.get(), point_sampler.get()};
          ID3D11ShaderResourceView* srvs[3] = {data.input_depth_srv, data.input_mv_srv, nullptr};
-         ID3D11RenderTargetView* rtvs[1] = {resources[MotionBlurTexture::VelocityBuffer].rtv.get()};
+         ID3D11RenderTargetView* rtvs[1] = {resources[Texture::VelocityBuffer].rtv.get()};
          ID3D11Buffer* cbvs[] = {cbuffer.get()};
          
          cb_data.MainTex_TexelSize.x = static_cast<float>(data.velocity_tex_width);
@@ -295,14 +295,14 @@ namespace MotionBlur
          device_context->Draw(3, 0);
          
          // Tile2
-         cb_data.MainTex_TexelSize.x = resources[MotionBlurTexture::VelocityBuffer].dimension.x;
-         cb_data.MainTex_TexelSize.y = resources[MotionBlurTexture::VelocityBuffer].dimension.y;
+         cb_data.MainTex_TexelSize.x = resources[Texture::VelocityBuffer].dimension.x;
+         cb_data.MainTex_TexelSize.y = resources[Texture::VelocityBuffer].dimension.y;
          cb_data.MainTex_TexelSize.z = 1.f / cb_data.MainTex_TexelSize.x;
          cb_data.MainTex_TexelSize.w = 1.f / cb_data.MainTex_TexelSize.y;
-         viewport.Width = resources[MotionBlurTexture::Tile2].dimension.x;
-         viewport.Height = resources[MotionBlurTexture::Tile2].dimension.y;
-         rtvs[0] = resources[MotionBlurTexture::Tile2].rtv.get();
-         srvs[0] = resources[MotionBlurTexture::VelocityBuffer].srv.get();
+         viewport.Width = resources[Texture::Tile2].dimension.x;
+         viewport.Height = resources[Texture::Tile2].dimension.y;
+         rtvs[0] = resources[Texture::Tile2].rtv.get();
+         srvs[0] = resources[Texture::VelocityBuffer].srv.get();
          device_context->Map(cbuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
          memcpy(mapped_buffer.pData, &cb_data, sizeof(cb_data));
          device_context->Unmap(cbuffer.get(), 0);
@@ -314,14 +314,14 @@ namespace MotionBlur
          device_context->Draw(3, 0);
          
          // Tile4
-         cb_data.MainTex_TexelSize.x = resources[MotionBlurTexture::Tile2].dimension.x;
-         cb_data.MainTex_TexelSize.y = resources[MotionBlurTexture::Tile2].dimension.y;
+         cb_data.MainTex_TexelSize.x = resources[Texture::Tile2].dimension.x;
+         cb_data.MainTex_TexelSize.y = resources[Texture::Tile2].dimension.y;
          cb_data.MainTex_TexelSize.z = 1.f / cb_data.MainTex_TexelSize.x;
          cb_data.MainTex_TexelSize.w = 1.f / cb_data.MainTex_TexelSize.y;
-         viewport.Width = resources[MotionBlurTexture::Tile4].dimension.x;
-         viewport.Height = resources[MotionBlurTexture::Tile4].dimension.y;
-         rtvs[0] = resources[MotionBlurTexture::Tile4].rtv.get();
-         srvs[0] = resources[MotionBlurTexture::Tile2].srv.get();
+         viewport.Width = resources[Texture::Tile4].dimension.x;
+         viewport.Height = resources[Texture::Tile4].dimension.y;
+         rtvs[0] = resources[Texture::Tile4].rtv.get();
+         srvs[0] = resources[Texture::Tile2].srv.get();
          device_context->Map(cbuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
          memcpy(mapped_buffer.pData, &cb_data, sizeof(cb_data));
          device_context->Unmap(cbuffer.get(), 0);
@@ -333,14 +333,14 @@ namespace MotionBlur
          device_context->Draw(3, 0);
          
          // Tile8
-         cb_data.MainTex_TexelSize.x = resources[MotionBlurTexture::Tile4].dimension.x;
-         cb_data.MainTex_TexelSize.y = resources[MotionBlurTexture::Tile4].dimension.y;
+         cb_data.MainTex_TexelSize.x = resources[Texture::Tile4].dimension.x;
+         cb_data.MainTex_TexelSize.y = resources[Texture::Tile4].dimension.y;
          cb_data.MainTex_TexelSize.z = 1.f / cb_data.MainTex_TexelSize.x;
          cb_data.MainTex_TexelSize.w = 1.f / cb_data.MainTex_TexelSize.y;
-         viewport.Width = resources[MotionBlurTexture::Tile8].dimension.x;
-         viewport.Height = resources[MotionBlurTexture::Tile8].dimension.y;
-         rtvs[0] = resources[MotionBlurTexture::Tile8].rtv.get();
-         srvs[0] = resources[MotionBlurTexture::Tile4].srv.get();
+         viewport.Width = resources[Texture::Tile8].dimension.x;
+         viewport.Height = resources[Texture::Tile8].dimension.y;
+         rtvs[0] = resources[Texture::Tile8].rtv.get();
+         srvs[0] = resources[Texture::Tile4].srv.get();
          device_context->Map(cbuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
          memcpy(mapped_buffer.pData, &cb_data, sizeof(cb_data));
          device_context->Unmap(cbuffer.get(), 0);
@@ -352,14 +352,14 @@ namespace MotionBlur
          device_context->Draw(3, 0);
          
          // TileMax
-         cb_data.MainTex_TexelSize.x = resources[MotionBlurTexture::Tile8].dimension.x;
-         cb_data.MainTex_TexelSize.y = resources[MotionBlurTexture::Tile8].dimension.y;
+         cb_data.MainTex_TexelSize.x = resources[Texture::Tile8].dimension.x;
+         cb_data.MainTex_TexelSize.y = resources[Texture::Tile8].dimension.y;
          cb_data.MainTex_TexelSize.z = 1.f / cb_data.MainTex_TexelSize.x;
          cb_data.MainTex_TexelSize.w = 1.f / cb_data.MainTex_TexelSize.y;
-         viewport.Width = resources[MotionBlurTexture::TileMax].dimension.x;
-         viewport.Height = resources[MotionBlurTexture::TileMax].dimension.y;
-         rtvs[0] = resources[MotionBlurTexture::TileMax].rtv.get();
-         srvs[0] = resources[MotionBlurTexture::Tile8].srv.get();
+         viewport.Width = resources[Texture::TileMax].dimension.x;
+         viewport.Height = resources[Texture::TileMax].dimension.y;
+         rtvs[0] = resources[Texture::TileMax].rtv.get();
+         srvs[0] = resources[Texture::Tile8].srv.get();
          device_context->Map(cbuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
          memcpy(mapped_buffer.pData, &cb_data, sizeof(cb_data));
          device_context->Unmap(cbuffer.get(), 0);
@@ -371,14 +371,14 @@ namespace MotionBlur
          device_context->Draw(3, 0);
          
          // TileNeighborMax
-         cb_data.MainTex_TexelSize.x = resources[MotionBlurTexture::TileMax].dimension.x;
-         cb_data.MainTex_TexelSize.y = resources[MotionBlurTexture::TileMax].dimension.y;
+         cb_data.MainTex_TexelSize.x = resources[Texture::TileMax].dimension.x;
+         cb_data.MainTex_TexelSize.y = resources[Texture::TileMax].dimension.y;
          cb_data.MainTex_TexelSize.z = 1.f / cb_data.MainTex_TexelSize.x;
          cb_data.MainTex_TexelSize.w = 1.f / cb_data.MainTex_TexelSize.y;
-         viewport.Width = resources[MotionBlurTexture::TileNeighborMax].dimension.x;
-         viewport.Height = resources[MotionBlurTexture::TileNeighborMax].dimension.y;
-         rtvs[0] = resources[MotionBlurTexture::TileNeighborMax].rtv.get();
-         srvs[0] = resources[MotionBlurTexture::TileMax].srv.get();
+         viewport.Width = resources[Texture::TileNeighborMax].dimension.x;
+         viewport.Height = resources[Texture::TileNeighborMax].dimension.y;
+         rtvs[0] = resources[Texture::TileNeighborMax].rtv.get();
+         srvs[0] = resources[Texture::TileMax].srv.get();
          device_context->Map(cbuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
          memcpy(mapped_buffer.pData, &cb_data, sizeof(cb_data));
          device_context->Unmap(cbuffer.get(), 0);
@@ -396,8 +396,8 @@ namespace MotionBlur
          cb_data.MainTex_TexelSize.w = 1.f / cb_data.MainTex_TexelSize.y;
          rtvs[0] = data.output_rtv;
          srvs[0] = data.input_color_srv;
-         srvs[1] = resources[MotionBlurTexture::TileNeighborMax].srv.get();
-         srvs[2] = resources[MotionBlurTexture::VelocityBuffer].srv.get();
+         srvs[1] = resources[Texture::TileNeighborMax].srv.get();
+         srvs[2] = resources[Texture::VelocityBuffer].srv.get();
          viewport.Width = static_cast<float>(data.width);
          viewport.Height = static_cast<float>(data.height);
          device_context->Map(cbuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
@@ -458,7 +458,7 @@ namespace MotionBlur
          if (width == 0 || height == 0)
             return;
 
-         if (resources[MotionBlurTexture::VelocityBuffer].tex.get())
+         if (resources[Texture::VelocityBuffer].tex.get())
          {
             if (cached_width == width && cached_height == height)
                return;
@@ -467,7 +467,7 @@ namespace MotionBlur
          //reshade::log::message(reshade::log::level::info, "Motion Blur: creating textures.");
          
          {
-            auto CreateMotionBlurResource = [&](MotionBlurTexture t, const D3D11_TEXTURE2D_DESC& desc)
+            auto CreateResource = [&](Texture t, const D3D11_TEXTURE2D_DESC& desc)
             {
                auto& r = resources[t];
 
@@ -502,35 +502,35 @@ namespace MotionBlur
             desc.MiscFlags = 0;
             desc.MipLevels = 1;
             
-            CreateMotionBlurResource(MotionBlurTexture::VelocityBuffer, desc);
+            CreateResource(Texture::VelocityBuffer, desc);
             
             desc.Width = (width + 1) / 2;
             desc.Height = (height + 1) / 2;
             desc.Format = DXGI_FORMAT_R16G16_FLOAT;
-            CreateMotionBlurResource(MotionBlurTexture::Tile2, desc);
+            CreateResource(Texture::Tile2, desc);
             
             desc.Width = (width + 3) / 4;
             desc.Height = (height + 3) / 4;
-            CreateMotionBlurResource(MotionBlurTexture::Tile4, desc);
+            CreateResource(Texture::Tile4, desc);
             
             desc.Width = (width + 7) / 8;
             desc.Height = (height + 7) / 8;
-            CreateMotionBlurResource(MotionBlurTexture::Tile8, desc);
+            CreateResource(Texture::Tile8, desc);
             
             const float kMaxBlurRadius = 5.f;
             int maxBlurPixels = static_cast<int>(kMaxBlurRadius * static_cast<float>(height) / 100.f);
             int tileSize = ((maxBlurPixels - 1) / 8 + 1) * 8;
             desc.Width = (width + tileSize - 1) / tileSize;
             desc.Height = (height + tileSize - 1) / tileSize;
-            CreateMotionBlurResource(MotionBlurTexture::TileMax, desc);
-            CreateMotionBlurResource(MotionBlurTexture::TileNeighborMax, desc);
+            CreateResource(Texture::TileMax, desc);
+            CreateResource(Texture::TileNeighborMax, desc);
             
             cached_width = width;
             cached_height = height;
          }
       }
       
-      EnumArray<MotionBlurResource, MotionBlurTexture> resources;
+      EnumArray<Resource, Texture> resources;
 
       ComPtr<ID3D11Buffer> cbuffer;
       ComPtr<ID3D11SamplerState> linear_sampler;
@@ -559,10 +559,10 @@ namespace TemporalAADepth
       }
    };
    
-   enum class TemporalAADepthTexture
+   enum class Texture
    {
-      PrevDepthTemporal,
-      DepthTemporal,
+      DepthHistoryRead,
+      DepthHistoryWrite,
       Count,
    };
    
@@ -578,7 +578,7 @@ namespace TemporalAADepth
       bool has_history = false;
    };
    
-   struct CBufferData
+   struct alignas(16) CBufferData
    {
       float4 ScreenInfo = {0.0, 0.0, 0.0, 0.0};
       int UseVarianceClipping;
@@ -586,7 +586,7 @@ namespace TemporalAADepth
       float2 VelocityScale = {0.0, 0.0};
    };
    
-   struct TemporalAADepthResource
+   struct Resource
    {
       ComPtr<ID3D11Texture2D> tex;
       ComPtr<ID3D11UnorderedAccessView> uav;
@@ -663,23 +663,17 @@ namespace TemporalAADepth
          SetupTextures(device, data.width, data.height);
          
          ID3D11SamplerState* cs_samplers[2] = {linear_sampler.get(), point_sampler.get()};
-         ID3D11ShaderResourceView* srvs[3] = {data.input_depth_srv, resources[TemporalAADepthTexture::PrevDepthTemporal].srv.get(), data.input_mv_srv};
-         ID3D11UnorderedAccessView* uavs[1] = {resources[TemporalAADepthTexture::DepthTemporal].uav.get()};
+         ID3D11ShaderResourceView* srvs[3] = {data.input_depth_srv, resources[Texture::DepthHistoryRead].srv.get(), data.input_mv_srv};
+         ID3D11UnorderedAccessView* uavs[1] = {resources[Texture::DepthHistoryWrite].uav.get()};
          ID3D11Buffer* cbvs[] = {cbuffer.get()};
+         const auto shader_hash = data.has_history ? Math::CompileTimeStringHash("Temporal AA Depth With History") : Math::CompileTimeStringHash("Temporal AA Depth Without History");
+         ID3D11ComputeShader* cs = device_data.native_compute_shaders.at(shader_hash).get();
          
          D3D11_MAPPED_SUBRESOURCE mapped_buffer;
          device_context->Map(cbuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
          memcpy(mapped_buffer.pData, &cb_data, sizeof(cb_data));
          device_context->Unmap(cbuffer.get(), 0);
-         ID3D11ComputeShader* cs;
-         if (data.has_history)
-         {
-            cs = device_data.native_compute_shaders.at(Math::CompileTimeStringHash("Temporal AA Depth With History")).get();
-         }
-         else
-         {
-            cs = device_data.native_compute_shaders.at(Math::CompileTimeStringHash("Temporal AA Depth Without History")).get();
-         }
+         
          device_context->CSSetShader(cs,nullptr,0);
          device_context->CSSetSamplers(7, 2, &cs_samplers[0]);
          device_context->CSSetConstantBuffers(0, 1, &cbvs[0]);
@@ -687,10 +681,11 @@ namespace TemporalAADepth
          device_context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
          device_context->Dispatch((data.width + 7) / 8, (data.height + 7) / 8, 1);
          
-         device_context->CopyResource(resources[TemporalAADepthTexture::PrevDepthTemporal].tex.get(), resources[TemporalAADepthTexture::DepthTemporal].tex.get());
+         //device_context->CopyResource(resources[Texture::DepthHistoryRead].tex.get(), resources[Texture::DepthHistoryWrite].tex.get());
+         std::swap(resources[Texture::DepthHistoryRead], resources[Texture::DepthHistoryWrite]);
       }
 
-      EnumArray<TemporalAADepthResource, TemporalAADepthTexture> resources;
+      EnumArray<Resource, Texture> resources;
 
    private:
       void InitCBuffer(const DrawData& data, CBufferData& cbuffer)
@@ -701,16 +696,7 @@ namespace TemporalAADepth
          cbuffer.ScreenInfo.y = resolution.y;
          cbuffer.ScreenInfo.z = 1.f / resolution.x;
          cbuffer.ScreenInfo.w = 1.f / resolution.y;
-         
-         if (data.use_variance_clip)
-         {
-            cbuffer.UseVarianceClipping = 1;
-         }
-         else
-         {
-            cbuffer.UseVarianceClipping = 0;
-         }
-         
+         cbuffer.UseVarianceClipping = data.use_variance_clip ? 1 : 0;
          cbuffer.VarianceScale = data.variance_scale;
          cbuffer.VelocityScale = data.velocity_scale;
       }
@@ -720,7 +706,7 @@ namespace TemporalAADepth
          if (width == 0 || height == 0)
             return;
 
-         if (resources[TemporalAADepthTexture::DepthTemporal].tex.get())
+         if (resources[Texture::DepthHistoryWrite].tex.get())
          {
             if (cached_width == width && cached_height == height)
                return;
@@ -741,7 +727,7 @@ namespace TemporalAADepth
             desc.MipLevels = 1;
             
             {
-               auto& r = resources[TemporalAADepthTexture::DepthTemporal];
+               auto& r = resources[Texture::DepthHistoryWrite];
 
                D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc{};
                srv_desc.Format = DXGI_FORMAT_R32_FLOAT;
@@ -762,7 +748,7 @@ namespace TemporalAADepth
             }
             
             {
-               auto& r = resources[TemporalAADepthTexture::PrevDepthTemporal];
+               auto& r = resources[Texture::DepthHistoryRead];
 
                D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc{};
                srv_desc.Format = DXGI_FORMAT_R32_FLOAT;
@@ -810,6 +796,8 @@ float2 prev_projection_jitters = {0, 0};
 float2 output_resolution = {0, 0};
 int counter = 0;
 bool is_search_mode_on = false;
+bool is_in_battle_mode = false;
+bool will_motion_blur_render = false;
 
 namespace
 {
@@ -824,6 +812,7 @@ namespace
    ShaderHashesList shader_hashes_motion_blur;
    ShaderHashesList shader_hashes_dof_merge;
    ShaderHashesList shader_hashes_postfx_composite;
+   ShaderHashesList shader_hashes_postfx_composite_with_depth;
    
    CameraMatrices camera_matrices_current;
    CameraMatrices camera_matrices_previous;
@@ -877,6 +866,9 @@ struct GameDeviceDataBlueReflectionSecondLight final : public GameDeviceData
    ComPtr<ID3D11Texture2D> source_color;
    ComPtr<ID3D11ShaderResourceView> source_color_srv;
    ComPtr<ID3D11RenderTargetView> source_color_rtv;
+   
+   ComPtr<ID3D11Texture2D> postfx_source_color;
+   ComPtr<ID3D11ShaderResourceView> postfx_source_color_srv;
    
    ComPtr<ID3D11Texture2D> motion_vectors;
    ComPtr<ID3D11RenderTargetView> motion_vectors_rtv;
@@ -942,6 +934,7 @@ struct GameDeviceDataBlueReflectionSecondLight final : public GameDeviceData
    bool has_copied_fog_to_main_rt;
    bool has_drawn_search_mode;
    bool has_drawn_upscaling;
+   bool has_replaced_motion_blur;
    
    MotionBlur::MotionBlurPass motion_blur_pass;
    TemporalAADepth::TemporalAADepthPass temporal_depth_pass;
@@ -1062,13 +1055,34 @@ public:
             PostEffectSearchModeRendererPrepare
             );
       }
+      /*
+      if (!g_motion_blur_hook)
+      {
+         void* fn = reinterpret_cast<void*>(base_addr + 0x699C20);
+
+         g_motion_blur_hook = safetyhook::create_inline(
+            fn,
+            PostEffectMotionBlurRendererPrepare
+            );
+      }
+      */
+      if (!g_battle_mode_hook)
+      {
+         void* fn = reinterpret_cast<void*>(base_addr + 0x2EDBC0);
+
+         g_battle_mode_hook = safetyhook::create_inline(
+            fn,
+            Hooked_BattleMainLoopIterate
+            );
+      }
       
       CombineViewProjectionMatrices = reinterpret_cast<fnCombineViewProjectionMatrices>(base_addr + 0x46DAE0);
+      GetSettingValue = reinterpret_cast<fnGetSettingValue>(base_addr + 0x29850);   // index 15 is motion blur
       
       //native_shaders_definitions.emplace(CompileTimeStringHash("River Clear Velocity"), ShaderDefinition{"SRIVER-GBufferNormalMap", reshade::api::pipeline_subobject_type::pixel_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Effect Merge Test"), ShaderDefinition{"Luma_EffectMerge_OutputVelocity", reshade::api::pipeline_subobject_type::pixel_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Search Mode Filter"), ShaderDefinition{"Luma_PostEffectSearchMode", reshade::api::pipeline_subobject_type::pixel_shader});
-      //native_shaders_definitions.emplace(CompileTimeStringHash("Motion Blur"), ShaderDefinition{"Luma_PostEffectMotionBlurWithDT", reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Motion Blur Passthrough"), ShaderDefinition{"Luma_PostEffectMotionBlurWithDT", reshade::api::pipeline_subobject_type::pixel_shader});
       //native_shaders_definitions.emplace(CompileTimeStringHash("Decode Motion Vector"), ShaderDefinition{"Luma_DecodeMotionVector", reshade::api::pipeline_subobject_type::compute_shader});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Motion Blur Vertex"), 
@@ -1140,6 +1154,54 @@ public:
       game_device_data.g_shadow_memory.Resize(32 * 1024 * 1024);
       //game_device_data.g_prev_shadow_memory.Resize(32 * 1024 * 1024);
       game_device_data.g_cbuffer.Init(native_device, 32 * 1024 * 1024);
+   }
+   
+   static void SetupPostFXTexture(ID3D11Device* device, GameDeviceDataBlueReflectionSecondLight& game_device_data, uint32_t width, uint32_t height)
+   {
+      if (width == 0 ||
+          height == 0)
+      {
+         return;
+      }
+      if (game_device_data.postfx_source_color.get() != nullptr)
+      {
+         D3D11_TEXTURE2D_DESC desc;
+         game_device_data.postfx_source_color->GetDesc(&desc);
+         if (desc.Width == width &&
+             desc.Height == height)
+         {
+            return;
+         }
+      }
+      {
+         D3D11_TEXTURE2D_DESC desc;
+         desc.Width = width;
+         desc.Height = height;
+         desc.Usage = D3D11_USAGE_DEFAULT;
+         desc.ArraySize = 1;
+         desc.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS;
+         desc.SampleDesc.Count = 1;
+         desc.SampleDesc.Quality = 0;
+         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+         desc.CPUAccessFlags = 0;
+         desc.MiscFlags = 0;
+         desc.MipLevels = 1;
+
+         device->CreateTexture2D(&desc,
+            nullptr,
+            game_device_data.postfx_source_color.put());
+      }
+      {
+         D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
+         srv_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+         srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+         srv_desc.Texture2D.MostDetailedMip = 0;
+         srv_desc.Texture2D.MipLevels = 1;
+
+         device->CreateShaderResourceView(game_device_data.postfx_source_color.get(),
+            &srv_desc,
+            game_device_data.postfx_source_color_srv.put());
+      }
    }
    
    static void SetupMotionVectorTexture(ID3D11Device* device, GameDeviceDataBlueReflectionSecondLight& game_device_data, uint32_t width, uint32_t height)
@@ -1271,7 +1333,7 @@ public:
          
          game_device_data.source_color_rtv = render_target_views;
          
-         native_device_context->Draw(4, 0);
+         (*original_draw_dispatch_func)();
          
          {
             SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
@@ -1285,18 +1347,18 @@ public:
             if (test_index == 15 && device_data.sr_type == SR::Type::None)
             {
                native_device_context->OMSetRenderTargets(1, &rtv, nullptr);
-               native_device_context->Draw(4, 0);
+               (*original_draw_dispatch_func)();
                rtv = render_target_views.get();
                native_device_context->OMSetRenderTargets(1, &rtv, nullptr);
                srvs[0] = game_device_data.decoded_motion_vectors_srv.get();
                native_device_context->PSSetShaderResources(0, 2, srvs);
-               native_device_context->Draw(4, 0);
+               (*original_draw_dispatch_func)();
             }
             else
 #endif
             {
                native_device_context->OMSetRenderTargets(1, &rtv, nullptr);
-               native_device_context->Draw(4, 0);
+               (*original_draw_dispatch_func)();
                rtv = render_target_views.get();
                native_device_context->OMSetRenderTargets(1, &rtv, nullptr);
             }
@@ -1428,7 +1490,7 @@ public:
          ID3D11ShaderResourceView* srv = { game_device_data.decoded_motion_vectors_srv.get() };
          native_device_context->PSSetShader(ps, nullptr, 0);
          native_device_context->PSSetShaderResources(3, 1, &srv);
-         */
+         
          DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
          draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
          
@@ -1438,7 +1500,41 @@ public:
          native_device_context->OMGetRenderTargets(1, &rtvs[0], nullptr);
          MotionBlur::DrawData draw_data;
          draw_data.input_color_srv = srvs[1];
-         draw_data.input_depth_srv = srvs[0];
+         draw_data.input_depth_srv = game_device_data.temporal_depth_pass.resources[TemporalAADepth::Texture::DepthHistoryRead].srv.get();
+         draw_data.input_mv_srv = game_device_data.decoded_motion_vectors_srv.get();
+         draw_data.output_rtv = rtvs[0];
+         draw_data.width = *(int*)(RenderResolution + 0x00);
+         draw_data.height = *(int*)(RenderResolution + 0x04);
+         draw_data.velocity_tex_width = *(int*)(RenderResolution + 0x00);
+         draw_data.velocity_tex_height = *(int*)(RenderResolution + 0x04);
+         draw_data.z_far = CameraData->camera_distances.y;
+         draw_data.z_near = CameraData->camera_distances.x;
+         draw_data.z_reversed = false;
+         draw_data.shutter_angle = -270.f;
+         draw_data.sample_count = 10;
+         
+         game_device_data.motion_blur_pass.Draw(native_device, native_device_context, device_data, draw_data);
+         
+         draw_state_stack.Restore(native_device_context);
+         return DrawOrDispatchOverrideType::Replaced;
+         */
+         if (game_device_data.has_replaced_motion_blur)
+         {
+            auto ps = device_data.native_pixel_shaders[CompileTimeStringHash("Motion Blur Passthrough")].get();
+            native_device_context->PSSetShader(ps, nullptr, 0);
+            return DrawOrDispatchOverrideType::None;
+         }
+         
+         DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
+         draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
+         
+         ID3D11ShaderResourceView* srvs[2];
+         ID3D11RenderTargetView* rtvs[1];
+         native_device_context->PSGetShaderResources(0, 2, &srvs[0]);
+         native_device_context->OMGetRenderTargets(1, &rtvs[0], nullptr);
+         MotionBlur::DrawData draw_data;
+         draw_data.input_color_srv = srvs[1];
+         draw_data.input_depth_srv = game_device_data.temporal_depth_pass.resources[TemporalAADepth::Texture::DepthHistoryRead].srv.get();
          draw_data.input_mv_srv = game_device_data.decoded_motion_vectors_srv.get();
          draw_data.output_rtv = rtvs[0];
          draw_data.width = *(int*)(RenderResolution + 0x00);
@@ -1463,14 +1559,55 @@ public:
          if (original_shader_hashes.pixel_shaders[0] == 0xFB128186)
             slot = 0;
          
-         native_device_context->PSSetShaderResources(slot, 1, game_device_data.temporal_depth_pass.resources[TemporalAADepth::TemporalAADepthTexture::DepthTemporal].srv.get_addressof());
+         native_device_context->PSSetShaderResources(slot, 1, game_device_data.temporal_depth_pass.resources[TemporalAADepth::Texture::DepthHistoryRead].srv.get_addressof());
          return DrawOrDispatchOverrideType::None;
       }
       
       if (original_shader_hashes.Contains(shader_hashes_postfx_composite))
       {
-         native_device_context->PSSetShaderResources(2, 1, game_device_data.temporal_depth_pass.resources[TemporalAADepth::TemporalAADepthTexture::DepthTemporal].srv.get_addressof());
-         return DrawOrDispatchOverrideType::None;
+         if (original_shader_hashes.Contains(shader_hashes_postfx_composite_with_depth))
+         {
+            native_device_context->PSSetShaderResources(2, 1, game_device_data.temporal_depth_pass.resources[TemporalAADepth::Texture::DepthHistoryRead].srv.get_addressof());
+         }
+         
+         if (!is_in_battle_mode || GetSettingValue(15) == 0)
+            return DrawOrDispatchOverrideType::None;
+         
+         (*original_draw_dispatch_func)();
+
+         int width  = *(int*)(RenderResolution + 0x00);
+         int height = *(int*)(RenderResolution + 0x04);
+         SetupPostFXTexture(native_device, game_device_data, width, height);
+         
+         ComPtr<ID3D11RenderTargetView> render_target_views;
+         native_device_context->OMGetRenderTargets(1, render_target_views.put(), nullptr);
+         ComPtr<ID3D11Resource> resource;
+         render_target_views->GetResource(resource.put());
+         native_device_context->CopyResource(game_device_data.postfx_source_color.get(), resource.get());
+         
+         DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
+         draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
+         
+         MotionBlur::DrawData draw_data;
+         draw_data.input_color_srv = game_device_data.postfx_source_color_srv.get();
+         draw_data.input_depth_srv = game_device_data.temporal_depth_pass.resources[TemporalAADepth::Texture::DepthHistoryRead].srv.get();;
+         draw_data.input_mv_srv = game_device_data.decoded_motion_vectors_srv.get();
+         draw_data.output_rtv = render_target_views.get();
+         draw_data.width = *(int*)(RenderResolution + 0x00);
+         draw_data.height = *(int*)(RenderResolution + 0x04);
+         draw_data.velocity_tex_width = *(int*)(RenderResolution + 0x00);
+         draw_data.velocity_tex_height = *(int*)(RenderResolution + 0x04);
+         draw_data.z_far = CameraData->camera_distances.y;
+         draw_data.z_near = CameraData->camera_distances.x;
+         draw_data.z_reversed = false;
+         draw_data.shutter_angle = -270.f;
+         draw_data.sample_count = 10;
+         
+         game_device_data.motion_blur_pass.Draw(native_device, native_device_context, device_data, draw_data);
+         game_device_data.has_replaced_motion_blur = true;
+         
+         draw_state_stack.Restore(native_device_context);
+         return DrawOrDispatchOverrideType::Replaced;
       }
       
       // The game will copy to main RT after fog has drawn
@@ -2449,6 +2586,12 @@ public:
    
    static void OnDestroyResource(reshade::api::device *device, reshade::api::resource resource)
    {
+      auto& device_data = *device->get_private_data<DeviceData>();
+      auto& game_device_data = GetGameDeviceData(device_data);
+      
+      if (device_data.sr_type == SR::Type::None)
+         return;
+      
       ID3D11Buffer* buffer = nullptr;
       ID3D11Resource* native_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
 
@@ -2456,11 +2599,10 @@ public:
 
       if (SUCCEEDED(hr))
       {
-         auto& device_data = *device->get_private_data<DeviceData>();
-         auto& game_device_data = GetGameDeviceData(device_data);
-
-         game_device_data.g_pending_cb_data.erase(buffer);
-
+         if (game_device_data.g_pending_cb_data.find(buffer) != game_device_data.g_pending_cb_data.end())
+         {
+            game_device_data.g_pending_cb_data.erase(buffer);
+         }
          buffer->Release();
       }
    }
@@ -2471,7 +2613,7 @@ public:
       
       prev_projection_jitters = projection_jitters;
       
-      if (test_index == 14)
+      if (device_data.sr_type == SR::Type::None)
       {
          projection_jitters.x = 0.0;
          projection_jitters.y = 0.0;
@@ -2501,7 +2643,7 @@ public:
       game_device_data.g_cbuffer.Upload(context.get(), game_device_data.g_shadow_memory.Data(), game_device_data.g_shadow_memory.size);
       
       //(reshade::log::level::info, std::format("Cached cbuffer count: {}", game_device_data.g_pending_cb_data.size()).c_str());
-      /*
+      
       if (!custom_texture_mip_lod_bias_offset)
       {
          std::shared_lock shared_lock_samplers(s_mutex_samplers);
@@ -2514,7 +2656,7 @@ public:
             device_data.texture_mip_lod_bias_offset = 0.0f;
          }
       }
-      */
+      
       {
          game_device_data.remainder_command_list.store(nullptr, std::memory_order_relaxed);
          game_device_data.draw_device_context = nullptr;
@@ -2544,8 +2686,11 @@ public:
          game_device_data.has_copied_fog_to_main_rt = false;
          game_device_data.has_drawn_search_mode = false;
          game_device_data.has_drawn_upscaling = false;
+         game_device_data.has_replaced_motion_blur = false;
          device_data.sr_suppressed = false;
          is_search_mode_on = false;
+         is_in_battle_mode = false;
+         will_motion_blur_render = false;
          
          if (game_device_data.search_mode_filter_render_state.dirty)
          {
@@ -2566,11 +2711,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12;
       
-      enable_samplers_upgrade = false;
+      // Will cause game to hang upon exit
+      enable_samplers_upgrade = true;
 #if !DEVELOPMENT
       force_disable_display_composition = true;
 #endif
+      // Force game to use borderless due to Luma causing game in/out of focus in FSE
+      // which leads to game recalculating with jittery physics and stuttering
+      // DOESN'T FIX STILL
       prevent_fullscreen_state = false;
+      force_borderless = true;
 
       swapchain_format_upgrade_type = TextureFormatUpgradesType::None;
       swapchain_upgrade_type = SwapchainUpgradeType::None;
@@ -3360,6 +3510,25 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_postfx_composite.pixel_shaders = {
          0x0651FD77,
          0x0F539095,
+         0x00B5B879,
+         0x62EFF154,
+         0x9A9B6BB6,
+         0x48BE64DD,
+         0x968BB1D8,
+         0x2D8E0121,
+         0x4A5F5CE2,
+         0xCAD7869C,
+         0x88E8C085,
+         0x7DE15276,
+         0xD698FE2A,
+         0xCB4F0E0B,
+         0x2805C72A,
+         0x91A02148,
+         0xEA314404,
+      };
+      shader_hashes_postfx_composite_with_depth.pixel_shaders = {
+         0x0651FD77,
+         0x0F539095,
          0x9A9B6BB6,
          0x48BE64DD,
          0x4A5F5CE2,
@@ -3582,6 +3751,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       g_battle_camera_hook.reset();
       g_active_camera_hook.reset();
       g_search_mode_hook.reset();
+      g_battle_mode_hook.reset();
+      //g_motion_blur_hook.reset();
       reshade::unregister_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(BlueReflectionSecondLight::OnBindRenderTargetsAndDepthStencil);
       reshade::unregister_event<reshade::addon_event::clear_render_target_view>(BlueReflectionSecondLight::OnClearRenderTargetView);
       reshade::unregister_event<reshade::addon_event::copy_texture_region>(BlueReflectionSecondLight::OnCopyTextureRegion);
