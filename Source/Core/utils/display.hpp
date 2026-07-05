@@ -740,6 +740,20 @@ namespace Display
 		supported = false;
 		enabled = false;
 
+		// Luma (lunks fork): the Windows DisplayConfig "advanced color" HDR query is unreliable
+		// under Wine/Proton — it "succeeds" but reports HDR as OFF even when the compositor
+		// (e.g. gamescope) is actively outputting HDR, so Luma never engages HDR. Allow an
+		// opt-in override to force HDR supported+enabled. Set env var LUMA_FORCE_HDR=1.
+		{
+			char luma_force_hdr[8] = {};
+			if (GetEnvironmentVariableA("LUMA_FORCE_HDR", luma_force_hdr, sizeof(luma_force_hdr)) > 0 && luma_force_hdr[0] == '1')
+			{
+				supported = true;
+				enabled = true;
+				return true;
+			}
+		}
+
 	#if NTDDI_VERSION >= NTDDI_WIN11_GE
 		// This will only succeed from Windows 11 24H2
 		DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 colorInfo2{};
