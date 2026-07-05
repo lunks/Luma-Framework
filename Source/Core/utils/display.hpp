@@ -925,3 +925,4 @@ namespace Display
 		return false;
 	}
 }
+// build trigger
