@@ -1287,6 +1287,18 @@ public:
       {
          DisplayModeType current_display_mode = cb_luma_global_settings.DisplayMode;
          bool display_mode_changed = (is_tonemapping_sdr && current_display_mode == DisplayModeType::HDR) || (is_tonemapping_hdr && current_display_mode == DisplayModeType::SDR);
+         // lunks fork: under Wine/Proton (LUMA_FORCE_HDR=1) the vanilla-shader-based display mode
+         // detection fights the user's choice every frame (the OS HDR queries it depends on are
+         // stubbed), locking the overlay's Display Mode slider and hiding the HDR calibration
+         // sliders. Respect the user's configured DisplayMode instead of the shader heuristic.
+         static const bool luma_force_hdr = []() {
+            char v[8] = {};
+            return GetEnvironmentVariableA("LUMA_FORCE_HDR", v, sizeof(v)) > 0 && v[0] == '1';
+         }();
+         if (luma_force_hdr)
+         {
+            display_mode_changed = false;
+         }
          bool enable_hdr = is_tonemapping_hdr && current_display_mode != DisplayModeType::HDR;
          if (display_mode_changed)
          {
