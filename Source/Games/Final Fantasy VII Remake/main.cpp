@@ -2484,13 +2484,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       old_shader_file_names.emplace("Velocity_Gather_0xFEE03685.cs_5_0.hlsl");
 #endif
 
-#if !DEVELOPMENT
-      swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
-      swapchain_upgrade_type = SwapchainUpgradeType::HDR10;
-#else
+// lunks fork: HDR10 output mode is unfinished in Luma (the FF7R colorspace branch only emits
+// G2084 when last_swapchain_format is fp16, which never happens in HDR10 mode -> it falls back
+// to G22 SDR = "SDR in a 10-bit container"). scRGB's path emits G10_P709 (scRGB HDR) fp16
+// unconditionally, which is also the format gamescope+DXVK want. Use scRGB for both builds.
       swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
-#endif
 
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       // Texture upgrades (8 bit unorm and 11 bit float etc to 16 bit float)
